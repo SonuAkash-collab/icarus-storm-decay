@@ -1,0 +1,15 @@
+pandas
+polars
+pyarrow
+numpy
+matplotlib
+seaborn
+sgp4
+pymsis
+scikit-learn
+statsmodels
+econml
+doubleml
+spacetrack
+requests
+jupyter

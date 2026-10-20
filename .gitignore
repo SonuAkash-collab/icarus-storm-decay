@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.ipynb_checkpoints/
+
+# Data stays out of git (share via Drive)
+data/
+*.parquet
+*.csv
+*.tle
+*.gz
+*.zip
+
+# Misc
+wandb/
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

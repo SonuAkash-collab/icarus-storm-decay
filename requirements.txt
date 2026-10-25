@@ -13,3 +13,5 @@ doubleml
 spacetrack
 requests
 jupyter
+python-dotenv
+pytest

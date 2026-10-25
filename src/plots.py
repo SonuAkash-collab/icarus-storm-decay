@@ -1,4 +1,4 @@
-"""Plotting helpers for the sanity check."""
+"""Plotting helpers (sanity check, space weather)."""
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -48,6 +48,58 @@ def plot_object_with_storm(name, tles, rates, omni, event_time, start, end, out_
     axes[0].set_title(name, loc="left", fontsize=12, pad=16)
     fig.tight_layout()
 
+    if out_path is not None:
+        fig.savefig(out_path, dpi=150)
+    return fig
+
+
+def _clean_axes(ax):
+    ax.grid(alpha=0.25, lw=0.5)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+
+
+def plot_dst_with_storms(sw, storms, labels=None, out_path=None):
+    """Hourly Dst over the whole period; each storm shaded from onset to recovery_end.
+
+    sw: hourly table indexed by time (needs dst); storms: catalog from src/storms.py.
+    labels: {storm_id: text} for storms to label at their peak.
+    """
+    fig, ax = plt.subplots(figsize=(12, 4.5))
+    for _, s in storms.iterrows():
+        ax.axvspan(s["onset_time"], s["recovery_end"], color=EVENT_COLOR, alpha=0.15, lw=0)
+    ax.plot(sw.index, sw["dst"], color=WEATHER_COLOR, lw=0.7)
+    ax.axhline(-50, color=EVENT_COLOR, lw=0.8, ls="--")
+    ax.text(sw.index[0], -50, " -50 nT", color=EVENT_COLOR, va="bottom", fontsize=8)
+
+    for storm_id, text in (labels or {}).items():
+        s = storms.set_index("storm_id").loc[storm_id]
+        ax.annotate(f"{text}\n{s['min_dst']:.0f} nT", (s["peak_time"], s["min_dst"]),
+                    xytext=(12, 0), textcoords="offset points", va="center", fontsize=9)
+
+    ax.set_ylabel("Dst (nT)")
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b\n%Y"))
+    ax.set_title(f"Dst with the {len(storms)} storms (Dst < -50 nT) shaded, onset to recovery",
+                 loc="left", fontsize=12)
+    _clean_axes(ax)
+    fig.tight_layout()
+    if out_path is not None:
+        fig.savefig(out_path, dpi=150)
+    return fig
+
+
+def plot_f107(sw, out_path=None):
+    """Daily F10.7 with its 81-day centred mean."""
+    daily = sw[["f107", "f107_81d"]].resample("D").first()
+    fig, ax = plt.subplots(figsize=(12, 3.5))
+    ax.plot(daily.index, daily["f107"], color=WEATHER_COLOR, lw=0.8, label="daily F10.7")
+    ax.plot(daily.index, daily["f107_81d"], color=DATA_COLOR, lw=2, label="81-day centred mean")
+    ax.set_ylabel("F10.7 (sfu)")
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b\n%Y"))
+    ax.legend(frameon=False, loc="upper right")
+    ax.set_title("Solar UV background: F10.7", loc="left", fontsize=12)
+    _clean_axes(ax)
+    fig.tight_layout()
     if out_path is not None:
         fig.savefig(out_path, dpi=150)
     return fig

@@ -1,4 +1,4 @@
-"""Plotting helpers (sanity check, space weather)."""
+"""Plotting helpers (sanity check, space weather, physics-model comparison)."""
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -99,6 +99,52 @@ def plot_f107(sw, out_path=None):
     ax.legend(frameon=False, loc="upper right")
     ax.set_title("Solar UV background: F10.7", loc="left", fontsize=12)
     _clean_axes(ax)
+    fig.tight_layout()
+    if out_path is not None:
+        fig.savefig(out_path, dpi=150)
+    return fig
+
+
+# Physics-model comparison (notebook 03)
+MODEL_STYLE = {"nrlmsise00": ("NRLMSISE-00", "#e8a33d"), "msis21": ("MSIS 2.1", "#2e9e6b")}
+
+
+def plot_observed_vs_predicted(rates, storms, title, start=None, end=None, out_path=None):
+    """Two panels for one object: observed and predicted da/dt, and the residual.
+
+    rates: output of physics.run_physics for ONE object (t_mid, da_dt_km_per_day,
+    pred_<model>, resid_<model>). Storms are shaded from main_onset to recovery_end.
+    start/end: optional zoom window.
+    """
+    if start is not None:
+        rates = rates[(rates["t_mid"] >= start) & (rates["t_mid"] <= end)]
+    fig, axes = plt.subplots(2, 1, figsize=(12, 6.5), sharex=True,
+                             gridspec_kw={"height_ratios": [3, 2]})
+    for ax in axes:
+        for _, s in storms.iterrows():
+            if start is None or (s["recovery_end"] >= start and s["main_onset"] <= end):
+                ax.axvspan(s["main_onset"], s["recovery_end"], color=EVENT_COLOR, alpha=0.12, lw=0)
+
+    ax = axes[0]
+    ax.plot(rates["t_mid"], rates["da_dt_km_per_day"] * 1000, color=DATA_COLOR, lw=0.6,
+            marker="o", ms=2, label="observed (TLE)")
+    for model, (label, color) in MODEL_STYLE.items():
+        ax.plot(rates["t_mid"], rates[f"pred_{model}"] * 1000, color=color, lw=1.3, label=f"predicted, {label}")
+    ax.set_ylabel("da/dt (m/day)")
+    ax.legend(frameon=False, loc="lower left", fontsize=9, ncol=3)
+
+    ax = axes[1]
+    for model, (label, color) in MODEL_STYLE.items():
+        ax.plot(rates["t_mid"], rates[f"resid_{model}"] * 1000, color=color, lw=0.8, marker="o", ms=1.5,
+                label=label)
+    ax.axhline(0, color=WEATHER_COLOR, lw=0.8)
+    ax.set_ylabel("observed - predicted\n(m/day, < 0 = extra decay)")
+
+    fmt = "%b %d" if start is not None else "%b\n%Y"
+    axes[-1].xaxis.set_major_formatter(mdates.DateFormatter(fmt))
+    axes[0].set_title(title, loc="left", fontsize=12)
+    for ax in axes:
+        _clean_axes(ax)
     fig.tight_layout()
     if out_path is not None:
         fig.savefig(out_path, dpi=150)

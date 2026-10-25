@@ -37,12 +37,15 @@ def tle_to_row(line1, line2):
 def tles_to_frame(records):
     """Turn Space-Track GP records (dicts with TLE_LINE1/TLE_LINE2) into a DataFrame.
 
-    Keeps CREATION_DATE (when Space-Track published the TLE) so duplicates can be resolved.
+    Keeps CREATION_DATE (when Space-Track published the TLE) so duplicates can be resolved,
+    and the two TLE lines so the orbit can be propagated later (src/physics.py).
     """
     rows = []
     for rec in records:
         row = tle_to_row(rec["TLE_LINE1"], rec["TLE_LINE2"])
         row["created"] = pd.Timestamp(rec.get("CREATION_DATE")) if rec.get("CREATION_DATE") else pd.NaT
+        row["line1"] = rec["TLE_LINE1"]
+        row["line2"] = rec["TLE_LINE2"]
         rows.append(row)
     return pd.DataFrame(rows)
 

@@ -100,6 +100,8 @@ def test_operator_offset(fake):
     assert truth["offset_ratio"] == pytest.approx(0.3 + 0.7 * 0.5)
     passive = table[table["is_active"] == 0]
     assert (passive["true_manoeuvre"] == 0).all()
+    assert passive["drag_sensitivity"].notna().all()
+    assert table.loc[table["is_active"] == 1, "drag_sensitivity"].isna().any()
     active = table[table["is_active"] == 1]
     during = active[active["T_storm"] == 1]
     # Ducking: operators cancel duck_share of the storm effect while it lasts

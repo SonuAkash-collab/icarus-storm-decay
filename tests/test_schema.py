@@ -37,6 +37,7 @@ def tiny_table():
         "tle_ok": 1,
         "is_active": 0,
         "Y_residual": [0.5, -20.0, -15.0],
+        "Y_residual_nrl": [0.8, -18.0, -14.0],
         "Y_log_ratio": [0.0, 0.3, 0.2],
         "T_ap_int": [5.0, 150.0, 80.0],
         "f107": 200.0,
@@ -87,6 +88,7 @@ def test_nearest_storm_wins():
     (lambda d: d.assign(storm_class=pd.array([pd.NA, "huge", "extreme"], dtype="string")), "storm_class"),
     (lambda d: d.assign(f107=np.nan), "nulls"),
     (lambda d: d.assign(tle_ok=-1), "tle_ok"),
+    (lambda d: d.assign(drag_sensitivity=np.nan), "drag_sensitivity"),
     (lambda d: d.assign(ecc=1.5), "ecc"),
     (lambda d: pd.concat([d, d.iloc[:1]]), "duplicate"),
 ])
@@ -100,6 +102,13 @@ def test_main_sample_filters():
     assert len(schema.main_sample(df)) == 1
     report = schema.sample_report(df).set_index("filter")["removed"]
     assert report["ecc >= 0.01"] == 1 and report["TLE failed cleaning"] == 1 and report["kept"] == 1
+
+
+def test_active_may_lack_drag_sensitivity():
+    df = tiny_table().assign(is_active=1, drag_sensitivity=[np.nan, 0.01, 0.01])
+    assert schema.problems(df) == []
+    report = schema.sample_report(df.assign(is_active=[1, 0, 0])).set_index("filter")["removed"]
+    assert report["active satellite"] == 1 and report["no drag_sensitivity"] == 0
 
 
 def test_bridges_onset():

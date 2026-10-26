@@ -32,7 +32,8 @@ How the fake world works:
   sensitivity, so the effect differs by altitude as the vulnerability map expects.
 - Active satellites: during the storm (main_onset to recovery_end) operators cut
   duck_share of the storm effect; in the next RECOVERY_DAYS they win back
-  recover_share of what was still lost. Total offset ratio = duck_share +
+  recover_share of what was still lost. NO_DRAG_FIT of them have no
+  drag_sensitivity (manoeuvres spoil the quiet-time fit). Total offset ratio = duck_share +
   (1 - duck_share) * recover_share.
 """
 
@@ -55,6 +56,7 @@ APSIDAL_DAYS = 60.0                  # period of the perigee swing
 BAD_FIT_QUIET = 0.02                 # share of bad TLE fits on quiet days ...
 BAD_FIT_STORM = 0.10                 # ... and inside storm windows
 BAD_FIT_JUMP = (-40.0, 20.0)         # mean and sd of the fake jump (m/day)
+NO_DRAG_FIT = 0.2                    # share of active satellites without drag_sensitivity
 INCLINATIONS = [51.6, 53.0, 65.0, 72.0, 82.0, 87.0, 98.0]
 
 
@@ -222,10 +224,19 @@ def make_synthetic(n_objects=200, n_storms=20, storms=None, active_share=0.15,
                         + df["true_effect"] + df["true_manoeuvre"] + df["true_artifact"]
                         + rng.normal(0, noise, len(df)) / np.sqrt(df["dt_days"]))
 
+    # NRLMSISE-00 version: same truth, a slightly different model error (it runs hotter
+    # at high Sun UV) and its own fit noise
+    df["Y_residual_nrl"] = (df["Y_residual"] + 0.02 * (df["f107"] - 150)
+                            + rng.normal(0, 0.5 * noise, len(df)) / np.sqrt(df["dt_days"]))
+
     # Physics-model prediction (m/day, negative) only to build the log ratio
     predicted = -60 * np.exp(-(df["alt_km"] - 400) / 60) * (df["drag_sensitivity"] / 0.01) * df["f107"] / 150
     observed = predicted + df["Y_residual"]
     df["Y_log_ratio"] = np.log((observed / predicted).where(observed < 0))
+
+    # Some active satellites have no usable quiet-time fit (manoeuvres), as in real data
+    no_fit = objects.loc[(objects["is_active"] == 1) & (rng.random(n_objects) < NO_DRAG_FIT), "norad_id"]
+    df.loc[df["norad_id"].isin(no_fit), "drag_sensitivity"] = np.nan
 
     df = df.drop(columns=["t_start", "t_end", "offset", "phase"]).sort_values(["norad_id", "t_mid"])
     table = validate(df.reset_index(drop=True))

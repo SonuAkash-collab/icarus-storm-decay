@@ -22,9 +22,10 @@ Columns (who builds them: A = orbit data, B = space weather + physics):
                          outlier, no climb of a passive object), else 0. Rows with
                          0 stay in the table so the share removed can be reported
     is_active         B  0 = passive (debris, rocket body, dead satellite), 1 = active
-    Y_residual        B  observed minus predicted da/dt (m/day). Negative = more decay
-                         than the physics model predicts. physics.py works in km/day,
-                         so multiply its resid_<model> by 1000.
+    Y_residual        B  observed minus predicted da/dt (m/day) with MSIS 2.1. Negative =
+                         more decay than the physics model predicts. physics.py works in
+                         km/day, so this is resid_msis21 * 1000.
+    Y_residual_nrl    B  the same with NRLMSISE-00 (resid_nrlmsise00 * 1000), robustness
     Y_log_ratio       B  log(observed / predicted); NaN when the object is not seen
                          to decay (observed >= 0), as in physics.add_predictions
     T_ap_int          B  ap integrated over the interval (nT * day), continuous treatment
@@ -34,7 +35,9 @@ Columns (who builds them: A = orbit data, B = space weather + physics):
     storm_class       B  class of that storm (storms.storm_class); <NA> if none
     event_day         B  days from that storm's main_onset to t_mid; NaN if none
     f107, f107_81d    B  daily and 81-day F10.7 (sfu), Sun UV confounders
-    drag_sensitivity  B  quiet-time drag sensitivity B = Cd*A/m (m^2/kg), physics.py
+    drag_sensitivity  B  quiet-time drag sensitivity B = Cd*A/m (m^2/kg), physics.py.
+                         May be missing for active satellites (manoeuvres spoil the
+                         quiet-time fit); sample_report counts them
 
 Rules the table enforces (see validate):
 - BSTAR and air density are never columns: BSTAR jumps during storms and density is
@@ -66,6 +69,7 @@ COLUMNS = {
     "tle_ok":           ("int64",          "",              "A", "1 = both TLEs passed cleaning"),
     "is_active":        ("int64",          "",              "B", "0 = passive, 1 = active"),
     "Y_residual":       ("float64",        "m/day",         "B", "Observed minus predicted decay"),
+    "Y_residual_nrl":   ("float64",        "m/day",         "B", "Observed minus predicted decay (NRLMSISE-00)"),
     "Y_log_ratio":      ("float64",        "",              "B", "log(observed / predicted)"),
     "T_ap_int":         ("float64",        "nT*day",        "B", "ap integrated over the interval"),
     "T_storm":          ("int64",          "",              "B", "1 if inside a storm window"),
@@ -78,7 +82,7 @@ COLUMNS = {
 }
 KEY = ["norad_id", "t_mid"]
 
-OUTCOMES = ["Y_residual", "Y_log_ratio"]
+OUTCOMES = ["Y_residual", "Y_residual_nrl", "Y_log_ratio"]
 TREATMENTS = ["T_ap_int", "T_storm"]
 # Adjustment set from the causal graph (src/dag.py checks it)
 CONFOUNDERS = ["f107", "f107_81d", "day_of_year", "alt_km", "inc_deg",
@@ -90,8 +94,7 @@ STORM_CLASSES = ["moderate", "strong", "severe", "extreme"]
 EVENT_WINDOW = (-10, 20)    # days around main_onset
 MAX_ECC = 0.01              # near-circular orbits only in the main analysis
 NOT_NULL = ["norad_id", "t_mid", "dt_days", "alt_km", "inc_deg", "local_solar_time",
-            "day_of_year", "ecc", "tle_ok", "is_active", "T_ap_int", "T_storm", "f107", "f107_81d",
-            "drag_sensitivity"]
+            "day_of_year", "ecc", "tle_ok", "is_active", "T_ap_int", "T_storm", "f107", "f107_81d"]
 
 
 def empty_frame():
@@ -130,6 +133,8 @@ def problems(df):
     nulls = [c for c in NOT_NULL if df[c].isna().any()]
     if nulls:
         out.append(f"nulls in required columns: {nulls}")
+    if (df["drag_sensitivity"].isna() & (df["is_active"] == 0)).any():
+        out.append("drag_sensitivity may only be missing for active satellites")
     if (df["dt_days"] <= 0).any():
         out.append("dt_days must be > 0")
     if df.duplicated(KEY).any():
@@ -170,14 +175,16 @@ def validate(df):
 
 def main_sample(df, max_ecc=MAX_ECC):
     """Rows for the main analysis: passive objects, near-circular orbits, clean TLEs."""
-    return df[(df["is_active"] == 0) & (df["ecc"] < max_ecc) & (df["tle_ok"] == 1)]
+    return df[(df["is_active"] == 0) & (df["ecc"] < max_ecc) & (df["tle_ok"] == 1)
+              & df["drag_sensitivity"].notna()]
 
 
 def sample_report(df, max_ecc=MAX_ECC):
     """How many rows each main-sample filter removes (count and share), applied in order."""
     steps = [("active satellite", df["is_active"] == 1),
              (f"ecc >= {max_ecc}", df["ecc"] >= max_ecc),
-             ("TLE failed cleaning", df["tle_ok"] == 0)]
+             ("TLE failed cleaning", df["tle_ok"] == 0),
+             ("no drag_sensitivity", df["drag_sensitivity"].isna())]
     keep = pd.Series(True, index=df.index)
     rows = []
     for name, drop in steps:

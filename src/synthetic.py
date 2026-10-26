@@ -63,7 +63,8 @@ INCLINATIONS = [51.6, 53.0, 65.0, 72.0, 82.0, 87.0, 98.0]
 def solar_flux(days, rng):
     """Daily f107 and f107_81d (sfu) for `days` (DatetimeIndex)."""
     t = (days - START).days.to_numpy()
-    f107_81d = 165 + 30 * np.sin(2 * np.pi * t / 365 + 0.5)
+    # Slow solar-cycle drift plus a ~5-month wave, so it is not just another season wave
+    f107_81d = 185 - 30 * t / 365 + 20 * np.sin(2 * np.pi * t / 150)
     noise = np.zeros(len(t))
     for i in range(1, len(t)):                       # AR(1) day-to-day noise
         noise[i] = 0.8 * noise[i - 1] + rng.normal(0, 8)
@@ -74,12 +75,12 @@ def solar_flux(days, rng):
 def make_storms(flux, n_storms=20, rng=None, min_gap_days=7):
     """Fake storm catalog with the columns of storms.storm_catalog that the analysis uses.
 
-    Onset day probability ~ (f107 - 60)^2 * (1 + 0.3 * equinox wave).
+    Onset day probability ~ (f107 - 60)^4 * (1 + 0.3 * equinox wave).
     """
     rng = np.random.default_rng(rng)
     days = flux.index[10:-25]                        # keep the full event window inside
     doy = days.dayofyear.to_numpy()
-    weight = (flux.loc[days, "f107"].to_numpy() - 60) ** 2 * (1 + 0.3 * np.cos(4 * np.pi * (doy - 80) / 365))
+    weight = (flux.loc[days, "f107"].to_numpy() - 60) ** 4 * (1 + 0.3 * np.cos(4 * np.pi * (doy - 80) / 365))
     weight /= weight.sum()
 
     chosen = []
@@ -151,7 +152,7 @@ def intervals(storms, rng, start=START, end=END):
 
 
 def make_synthetic(n_objects=200, n_storms=20, storms=None, active_share=0.15,
-                   tau0=0.05, scale_km=150.0, gamma=-0.08, noise=3.0,
+                   tau0=0.05, scale_km=150.0, gamma=-0.12, noise=3.0,
                    duck_share=0.3, recover_share=0.5, seed=0):
     """Fake analysis table in the schema format, and the storm catalog used.
 

@@ -201,11 +201,16 @@ def event_study(table, storms, outcome="Y_residual", use_main_sample=True, exclu
     """Full pipeline: sample -> stacks with clean controls -> fit.
 
     exclude_storms: storm_ids to leave out (e.g. May and Oct 2024 for the robustness
-    run). Returns (result, report); see fit and build_stacks.
+    run). They get no stack but still contaminate, so rows inside them never become
+    clean controls for their neighbours. Returns (result, report); see fit and build_stacks.
     """
     if use_main_sample:
         table = main_sample(table)
-    storms = storms[~storms["storm_id"].isin(exclude_storms)]
+    excluded = storms["storm_id"].isin(exclude_storms)
+    if excluded.any():
+        others = stack_kw.get("others")
+        stack_kw["others"] = pd.concat([others, storms[excluded]]) if others is not None else storms[excluded]
+    storms = storms[~excluded]
     stacked, report = build_stacks(table, storms, window, contam, **stack_kw)
     if report["used"].sum() < 2:
         raise ValueError(f"Only {report['used'].sum()} clean storms left with contam={contam!r}")

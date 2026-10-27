@@ -88,3 +88,21 @@ def test_short_run_effect_without_bootstrap(fake):
     res, _ = es.event_study(*fake, n_boot=0)
     sr = ec.short_run_effect(res)
     assert sr["est"] < 0 and np.isnan(sr["se"])
+
+
+def test_excluded_storms_still_contaminate():
+    table, storms = make_synthetic(n_objects=60, seed=0)
+    drop = storms["storm_id"].isin(storms["storm_id"].iloc[[3, 10]])
+    _, report = es.event_study(table, storms, exclude_storms=storms.loc[drop, "storm_id"], n_boot=0)
+    _, with_others = es.build_stacks(main_sample(table), storms[~drop], others=storms[drop])
+    _, without = es.build_stacks(main_sample(table), storms[~drop])
+    pd.testing.assert_frame_equal(report, with_others)
+    assert report["rows_contaminated"].sum() > without["rows_contaminated"].sum()
+
+
+def test_contam_sensitivity():
+    table, storms = make_synthetic(n_objects=80, seed=0)
+    out = ec.contam_sensitivity(table, storms, n_boot=19)
+    assert list(out.index) == ["active", str(ec.SENSITIVITY_CONTAM)]
+    assert out.loc[str(ec.SENSITIVITY_CONTAM), "storms_used"] >= 5
+    assert (out["est"] < 0).all()

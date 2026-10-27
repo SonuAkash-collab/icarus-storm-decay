@@ -130,9 +130,8 @@ follow-up PR from C together with the review fixes below.
     45 of 50 synthetic worlds, in both the linear and the curved-confounder world.
     If naive and DML agree on real data, report it as robustness.
   - ap lags 0 / 6 / 12 / 24 h: main lag fixed in advance, all four reported.
-  - Status: linear synthetic world passes, 48/50 (selection in the loop, scored against
-    the true-leftover-ap target). Still to do: curved-confounder world (waits on C's
-    option), lag sweep (waits on #9 reaching `main`), real data.
+  - Status: passes in both synthetic worlds (selection in the loop, true-leftover-ap
+    target): linear 48/50, curved 49/50. Still to do: lag sweep, real data.
 - [ ] **Refutations**: high-altitude group (>1,000 km) shows no effect, tested as
       equivalence (CI inside a pre-set band around zero), not just "not significant";
       it also catches storm-time TLE noise posing as decay. Random common cause leaves
@@ -183,3 +182,9 @@ follow-up PR from C together with the review fixes below.
   XGBoost 46/50, flexible XGBoost 45/50 (-4.2%). Selection picked XGBoost for the
   residual in 50/50 seeds and a straight line for ap in 45/50. Rule is final for the
   linear world; the curved world is still to run.
+- **Oct 27, DML curved world (Holla)**: with `uv_error_kind="curved"`, DML covers the
+  target in 49/50 seeds (bias -0.7%, sd 4.7%); linear controls 44/50 (bias -0.7% but
+  sd 10.7%, below the bar); naive 7/50 (+111%). Fixed ap model: straight line 49/50,
+  cautious XGBoost 42/50, flexible XGBoost 44/50 (-7.2%). The selection rule is final.
+  `sun_share` renamed `adjustment_share` ("share of the naive slope removed by
+  adjustment", all confounders).

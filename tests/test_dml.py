@@ -102,7 +102,7 @@ def test_dml_recovers_planted_effect(result, planted):
 def test_naive_is_fooled_by_sun_uv(result, planted):
     assert not result.loc["naive", "ci_lo"] <= planted <= result.loc["naive", "ci_hi"]
     assert abs(result.loc["naive", "coef"] - planted) > 3 * abs(result.loc["dml", "coef"] - planted)
-    assert result.attrs["sun_share"] > 0.2
+    assert result.attrs["adjustment_share"] > 0.2
 
 
 @pytest.mark.skipif(os.environ.get("ICARUS_SLOW") != "1", reason="slow: set ICARUS_SLOW=1")

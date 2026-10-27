@@ -7,8 +7,8 @@ Why not a plain regression: Sun UV (f107) raises both storm activity and the
 physics-model error, so a plain slope of Y_residual on ap credits the UV part to
 the storm (confounding). DML removes the confounders' influence from both sides:
 
-    Y_res = Y - E[Y | X]      (model_y, XGBoost)
-    T_res = T - E[T | X]      (model_t, XGBoost)
+    Y_res = Y - E[Y | X]      (model_y, chosen below)
+    T_res = T - E[T | X]      (model_t, chosen below)
     theta = slope of Y_res on T_res (weighted by dt_days, no intercept)
 
 This is the partially linear model Y = theta * T + g(X) + e, with X the adjustment
@@ -229,8 +229,8 @@ def compare(table, outcome="Y_residual", n_folds=5, n_boot=999, seed=0, all_t_mo
 
     Returns a DataFrame (rows naive / linear / dml, plus dml_t_<name> for each ap
     model when all_t_models; columns coef, se_cr1, se_boot, ci_lo, ci_hi, n_clusters)
-    with .attrs: sun_share = (naive - dml) / naive, the share of the naive effect that
-    was really Sun UV and the other confounders; n_rows; model_y / model_t / selection;
+    with .attrs: adjustment_share = (naive - dml) / naive, the share of the naive slope
+    removed by adjusting for all the confounders (not only F10.7); n_rows; model_y / model_t / selection;
     and planted_est (target implied by the fitted ap model) when the table has true_tau.
     The dml_t_<name> rows keep the selected residual model and force the ap model.
     """
@@ -250,7 +250,7 @@ def compare(table, outcome="Y_residual", n_folds=5, n_boot=999, seed=0, all_t_mo
             res[f"dml_t_{name}"] = {k: v for k, v in r.items()
                                     if k not in ("t_res", "y_res", "theta_econml", "model_y", "model_t", "selection")}
     out = pd.DataFrame(res).T
-    out.attrs["sun_share"] = (out.loc["naive", "coef"] - out.loc["dml", "coef"]) / out.loc["naive", "coef"]
+    out.attrs["adjustment_share"] = (out.loc["naive", "coef"] - out.loc["dml", "coef"]) / out.loc["naive", "coef"]
     out.attrs["n_rows"] = len(df)
     out.attrs.update(extra)
     if "true_tau" in df:
@@ -274,7 +274,7 @@ def seed_study(n_seeds=50, n_objects=200, n_boot=499, all_t_models=True, **synth
         df = prepare(table)
         n_storms = synthetic_kwargs.get("n_storms", 20)
         row = {"seed": seed, "planted": planted_theta(df, true_leftover_ap(df, seed, n_storms=n_storms)),
-               "planted_est": res.attrs["planted_est"], "sun_share": res.attrs["sun_share"],
+               "planted_est": res.attrs["planted_est"], "adjustment_share": res.attrs["adjustment_share"],
                "model_y": res.attrs["model_y"], "model_t": res.attrs["model_t"]}
         for m in res.index:
             row[f"{m}_coef"] = res.loc[m, "coef"]

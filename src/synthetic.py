@@ -32,7 +32,9 @@ How the fake world works:
 - UV model error: linear by default, gamma * (f107 - 150). With uv_error="curved" it
   grows with altitude and saturates at high F10.7,
       gamma * ((alt_km - 300) / 300)^2 * UV_SATURATION * tanh((f107 - 150) / UV_SATURATION),
-  as MSIS's UV error varies with altitude. Linear F10.7 controls then leave part of
+  as MSIS's UV error varies with altitude. Above UV_PEAK_KM the factor fades like
+  the air (60 km scale height), so the high-altitude group's error in m/day is about
+  zero, as the decay itself is. Linear F10.7 controls then leave part of
   the confounding in (the effect comes out ~10% too small), while a flexible model
   (DML) can remove it. The altitude factor averages about 1 over 400-800 km, so
   both versions have about the same strength.
@@ -81,6 +83,7 @@ STATION_KEEPING = (0.5, 3.0)         # m/day of routine boosts per active satell
 NO_DRAG_FIT = 0.2                    # share of active satellites without drag_sensitivity
 HIGH_ALT_KM = (1000.0, 1500.0)       # altitude range of the high-altitude control group
 UV_SATURATION = 40.0                 # sfu: the curved UV error flattens beyond about this far from 150
+UV_PEAK_KM = 800.0                   # the curved UV error peaks here and fades above it
 INCLINATIONS = [51.6, 53.0, 65.0, 72.0, 82.0, 87.0, 98.0]
 
 
@@ -186,7 +189,9 @@ def uv_error(f107, alt_km, gamma, kind="linear"):
     if kind == "linear":
         return gamma * x
     if kind == "curved":
-        return gamma * ((np.asarray(alt_km) - 300) / 300) ** 2 * UV_SATURATION * np.tanh(x / UV_SATURATION)
+        alt = np.asarray(alt_km)
+        factor = ((np.minimum(alt, UV_PEAK_KM) - 300) / 300) ** 2 * np.exp(-np.maximum(alt - UV_PEAK_KM, 0) / 60)
+        return gamma * factor * UV_SATURATION * np.tanh(x / UV_SATURATION)
     raise ValueError(f"uv_error must be 'linear' or 'curved', not {kind!r}")
 
 

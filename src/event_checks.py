@@ -27,6 +27,7 @@ from src.synthetic import make_synthetic, planted_event_profile
 SHORT_RUN = (0, 2)
 PRE_DAYS = (-10, -2)
 KEY_MONTHS = [(2024, 5), (2024, 10)]     # May 2024 superstorm, Oct 2024 severe storm
+SENSITIVITY_CONTAM = (-3, 10)            # stricter rule: also the 10 days after another onset
 
 
 def short_run_effect(result, days=SHORT_RUN):
@@ -156,6 +157,17 @@ def with_without(table, storms, drop=None, n_boot=999, seed=0):
     return pd.DataFrame(rows).T
 
 
+def contam_sensitivity(table, storms, rules=("active", SENSITIVITY_CONTAM), n_boot=999, seed=0):
+    """Short-run effect and storms used under each contamination rule. (-3, 10) also drops
+    rows in the 10 days after another storm's onset, where slow post-storm recovery
+    could leak into a neighbour's pre-period."""
+    rows = {}
+    for rule in rules:
+        res, report = es.event_study(table, storms, contam=rule, n_boot=n_boot, seed=seed)
+        rows[str(rule)] = pd.concat([short_run_effect(res), pd.Series({"storms_used": report["used"].sum()})])
+    return pd.DataFrame(rows).T
+
+
 def run_all(table, storms, n_placebo=500, n_boot=999, seed=0):
     """Every check on one table; returns a dict of results for the notebook / paper."""
     res, report = es.event_study(table, storms, n_boot=n_boot, seed=seed)
@@ -164,4 +176,5 @@ def run_all(table, storms, n_placebo=500, n_boot=999, seed=0):
     return {"result": res, "report": report, "summary": es.summarise(report),
             "short_run": sr, "pretrend": pretrend_test(res, placebo),
             "placebo": placebo, "placebo_summary": placebo_summary(placebo, sr["est"]),
-            "with_without": with_without(table, storms, n_boot=n_boot, seed=seed)}
+            "with_without": with_without(table, storms, n_boot=n_boot, seed=seed),
+            "contam_sensitivity": contam_sensitivity(table, storms, n_boot=n_boot, seed=seed)}

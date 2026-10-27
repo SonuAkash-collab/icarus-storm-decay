@@ -82,6 +82,24 @@ def test_adjusted_regression_recovers_effect_and_naive_is_fooled(fake):
     assert naive < adjusted - 0.15            # Sun UV makes the naive effect too big
 
 
+def test_curved_uv_error_fools_linear_controls():
+    table, _ = make_synthetic(n_objects=150, uv_error_kind="curved", seed=2)
+    assert table.attrs["truth"]["uv_error"] == "curved"
+    m = with_regressors(schema.main_sample(table))
+    linear = fe_slope(m, ["x", "f107", "f107_81d", "season"])
+    oracle = fe_slope(m.assign(Y_residual=m["Y_residual"] - m["true_uv_error"]), ["x", "f107_81d", "season"])
+    assert oracle == pytest.approx(-1.0, abs=0.25)
+    assert linear > oracle + 0.1               # linear F10.7 controls leave confounding in
+    # Error grows with altitude and flattens at high F10.7
+    hot = m[m["f107"] > 220]
+    assert hot.groupby(hot["alt_km"] > 600)["true_uv_error"].mean().diff().iloc[-1] < 0
+
+
+def test_default_uv_error_is_linear(fake):
+    t = fake[0]
+    np.testing.assert_allclose(t["true_uv_error"], t.attrs["truth"]["gamma"] * (t["f107"] - 150))
+
+
 def test_tle_artifacts_bias_unfiltered_sample(fake):
     table = fake[0]
     report = schema.sample_report(table).set_index("filter")

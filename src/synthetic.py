@@ -7,6 +7,7 @@ The table has the exact columns of src/schema.py, plus the planted truth:
     true_station_keeping  routine operator boosts in Y_residual (m/day, constant per
                       active satellite), 0 for passive objects
     true_artifact     TLE-fit part of Y_residual (m/day), 0 for clean intervals
+    true_uv_error     Sun UV model error in Y_residual (m/day), the confounding term
 A method passes if it recovers these from the schema columns alone.
 
 How the fake world works:
@@ -28,7 +29,14 @@ How the fake world works:
   * some intervals are bad fits, more often during storms, with a fake drop
     (mostly negative, so it looks like extra storm decay); they get tle_ok = 0.
   schema.main_sample removes both; using every row biases the storm effect.
-- Residual (m/day) = object offset + UV model error (gamma * (f107 - 150))
+- UV model error: linear by default, gamma * (f107 - 150). With uv_error="curved" it
+  grows with altitude and saturates at high F10.7,
+      gamma * ((alt_km - 300) / 300)^2 * UV_SATURATION * tanh((f107 - 150) / UV_SATURATION),
+  as MSIS's UV error varies with altitude. Linear F10.7 controls then leave part of
+  the confounding in (the effect comes out ~10% too small), while a flexible model
+  (DML) can remove it. The altitude factor averages about 1 over 400-800 km, so
+  both versions have about the same strength.
+- Residual (m/day) = object offset + UV model error
                      + season wave + true_effect + true_manoeuvre
                      + true_station_keeping + noise.
   true_tau shrinks with altitude (thinner air higher up) and grows with drag
@@ -72,6 +80,7 @@ BAD_FIT_JUMP = (-40.0, 20.0)         # mean and sd of the fake jump (m/day)
 STATION_KEEPING = (0.5, 3.0)         # m/day of routine boosts per active satellite
 NO_DRAG_FIT = 0.2                    # share of active satellites without drag_sensitivity
 HIGH_ALT_KM = (1000.0, 1500.0)       # altitude range of the high-altitude control group
+UV_SATURATION = 40.0                 # sfu: the curved UV error flattens beyond about this far from 150
 INCLINATIONS = [51.6, 53.0, 65.0, 72.0, 82.0, 87.0, 98.0]
 
 
@@ -170,6 +179,17 @@ def hourly_spaceweather(flux, ap):
     return out
 
 
+def uv_error(f107, alt_km, gamma, kind="linear"):
+    """Sun UV model error (m/day): linear in F10.7, or curved (grows with altitude,
+    saturates at high F10.7)."""
+    x = np.asarray(f107) - 150
+    if kind == "linear":
+        return gamma * x
+    if kind == "curved":
+        return gamma * ((np.asarray(alt_km) - 300) / 300) ** 2 * UV_SATURATION * np.tanh(x / UV_SATURATION)
+    raise ValueError(f"uv_error must be 'linear' or 'curved', not {kind!r}")
+
+
 def storm_effect_per_ap(alt_km, drag_sensitivity, tau0, scale_km):
     """Planted effect (m/day per nT): tau0 at 400 km and B = 0.01 m^2/kg, falling with altitude."""
     return tau0 * np.exp(-(np.asarray(alt_km) - 400) / scale_km) * (np.asarray(drag_sensitivity) / 0.01)
@@ -193,14 +213,16 @@ def intervals(storms, rng, start=START, end=END):
 
 def make_synthetic(n_objects=200, n_storms=20, storms=None, active_share=0.15,
                    tau0=0.05, scale_km=150.0, gamma=-0.12, noise=3.0,
-                   duck_share=0.3, recover_share=0.5, n_high_alt=0, return_hourly=False, seed=0):
+                   duck_share=0.3, recover_share=0.5, n_high_alt=0, return_hourly=False,
+                   uv_error_kind="linear", seed=0):
     """Fake analysis table in the schema format, and the storm catalog used.
 
     tau0: storm effect at 400 km (m/day per nT of ap); scale_km: how fast it fades
     with altitude; gamma: UV model error (m/day per sfu; the confounding strength);
     noise: residual noise (m/day for a 1-day interval); duck_share, recover_share:
     operator offset of active satellites; n_high_alt: number of extra passive objects
-    at 1,000-1,500 km (the high-altitude control, 10-20 is a realistic count).
+    at 1,000-1,500 km (the high-altitude control, 10-20 is a realistic count);
+    uv_error_kind: "linear" (default) or "curved" Sun UV model error (see above).
     Returns (table, storms), or (table, storms, hourly) with return_hourly=True; the
     planted settings are in table.attrs["truth"].
     """
@@ -282,7 +304,8 @@ def make_synthetic(n_objects=200, n_storms=20, storms=None, active_share=0.15,
     df["true_artifact"] = swing + jump
 
     season = 1.0 * np.sin(2 * np.pi * df["day_of_year"] / 365.25)
-    df["Y_residual"] = (df["offset"] + gamma * (df["f107"] - 150) + season
+    df["true_uv_error"] = uv_error(df["f107"], df["alt_km"], gamma, uv_error_kind)
+    df["Y_residual"] = (df["offset"] + df["true_uv_error"] + season
                         + df["true_effect"] + df["true_manoeuvre"] + df["true_artifact"]
                         + df["true_station_keeping"]
                         + draw("normal", 0, noise) / np.sqrt(df["dt_days"]))
@@ -309,7 +332,7 @@ def make_synthetic(n_objects=200, n_storms=20, storms=None, active_share=0.15,
                             "duck_share": duck_share, "recover_share": recover_share,
                             "recovery_share": (1 - duck_share) * recover_share,
                             "offset_ratio": duck_share + (1 - duck_share) * recover_share,
-                            "ap_quiet": AP_QUIET, "n_high_alt": n_high_alt, "seed": seed}
+                            "ap_quiet": AP_QUIET, "n_high_alt": n_high_alt, "uv_error": uv_error_kind, "seed": seed}
     if return_hourly:
         return table, storms, hourly_spaceweather(flux, ap)
     return table, storms

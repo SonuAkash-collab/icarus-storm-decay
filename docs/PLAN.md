@@ -129,9 +129,10 @@ follow-up PR from C together with the review fixes below.
   - Pass bar: the whole pipeline, selection included, covers the truth in at least
     45 of 50 synthetic worlds, in both the linear and the curved-confounder world.
     If naive and DML agree on real data, report it as robustness.
-  - ap lags 0 / 6 / 12 / 24 h: main lag fixed in advance, all four reported.
+  - ap lags 0 / 6 / 12 / 24 h: main lag fixed in advance, all four reported. Main lag = 0 h
+    (`dml.MAIN_LAG_HOURS`, `dml.lag_sweep`).
   - Status: passes in both synthetic worlds (selection in the loop, true-leftover-ap
-    target): linear 48/50, curved 49/50. Still to do: lag sweep, real data.
+    target): linear 48/50, curved 49/50. Lag sweep built. Still to do: real data.
 - [ ] **Refutations**: high-altitude group (>1,000 km) shows no effect, tested as
       equivalence (CI inside a pre-set band around zero), not just "not significant";
       it also catches storm-time TLE noise posing as decay. Random common cause leaves
@@ -188,3 +189,13 @@ follow-up PR from C together with the review fixes below.
   cautious XGBoost 42/50, flexible XGBoost 44/50 (-7.2%). The selection rule is final.
   `sun_share` renamed `adjustment_share` ("share of the naive slope removed by
   adjustment", all confounders).
+- **Oct 27, DML main ap lag (Holla)**: fixed at 0 h before any real-data run: it is
+  the window the decay is measured over, and MSIS already uses the ap history, so the
+  residual is the model's error over that window. 6, 12 and 24 h are reported
+  alongside, all on the same rows (those with ap at the longest lag; the first day of
+  the series drops out). Synthetic check (no lag planted, seed 0): the estimate is
+  largest at 0 h and fades with lag (linear world -0.0187, -0.0179, -0.0132, -0.0044
+  m/day per nT; planted -0.0188). The 6 h estimate stays close because ap 6 h apart is
+  strongly correlated (r = 0.74). On real data, if a later lag beats 0 h, report it as
+  MSIS mistiming the storm response (it links to the slow-recovery finding), not as a
+  reason to switch the main lag (Sonu, #16 review).

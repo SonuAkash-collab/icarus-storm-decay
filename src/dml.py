@@ -38,6 +38,12 @@ wild cluster bootstrap with Webb weights, as in src/event_study.py.
 When the effect differs by object (it does: altitude, drag sensitivity), theta is a
 weighted average of the per-object effects, weights = dt_days * T_res^2.
 planted_theta computes that target from the synthetic truth.
+
+ap lags: the thermosphere takes hours to respond to a storm, so lag_sweep rebuilds
+the treatment from ap L hours earlier (L = 0, 6, 12, 24) and reruns DML. The headline
+lag, MAIN_LAG_HOURS = 0, was fixed before any real-data run (decision log in
+docs/PLAN.md): it is the window the decay is measured over, and MSIS already uses
+the ap history, so the residual is the model's error over that same window.
 """
 
 import numpy as np
@@ -55,6 +61,8 @@ TREATMENT = "ap_mean"
 # CONFOUNDERS with day_of_year as a season wave (so late Dec and early Jan are close)
 FEATURES = ["f107", "f107_81d", "season_sin", "season_cos", "alt_km", "inc_deg",
             "local_solar_time", "drag_sensitivity"]
+LAGS_HOURS = (0, 6, 12, 24)    # ap lags swept
+MAIN_LAG_HOURS = 0             # headline lag, fixed in advance
 WEBB = np.array([-np.sqrt(1.5), -1.0, -np.sqrt(0.5), np.sqrt(0.5), 1.0, np.sqrt(1.5)])
 
 
@@ -222,6 +230,46 @@ def true_leftover_ap(df, seed, n_draws=200, n_storms=20):
     t1 = ((df["t_mid"] + half - syn.START).dt.total_seconds() / 3600).to_numpy()
     mean_ap = (np.interp(t1, grid, cum) - np.interp(t0, grid, cum)) / df["dt_days"].to_numpy()
     return df[TREATMENT].to_numpy() - mean_ap
+
+
+def ap_mean_shifted(df, hourly, shift_hours=0.0):
+    """Mean ap (nT) over each interval, using ap from shift_hours earlier.
+
+    hourly: hourly space weather with an `ap` column, indexed by hour (the format of
+    omni_io.load_spaceweather() and make_synthetic(return_hourly=True)). Each value
+    covers the hour after its time stamp, as in make_synthetic. NaN where the shifted
+    window reaches outside the series (e.g. the first day of the year at a 24 h lag).
+    """
+    ap = hourly["ap"].to_numpy(float)
+    n = len(ap)
+    cum = np.concatenate([[0.0], np.cumsum(ap)])     # nT*h at each hour boundary
+
+    half = pd.to_timedelta(df["dt_days"] / 2, unit="D")
+    h0 = ((df["t_mid"] - half - hourly.index[0]).dt.total_seconds() / 3600).to_numpy() - shift_hours
+    h1 = ((df["t_mid"] + half - hourly.index[0]).dt.total_seconds() / 3600).to_numpy() - shift_hours
+    grid = np.arange(n + 1)
+    mean_ap = (np.interp(h1, grid, cum) - np.interp(h0, grid, cum)) / (h1 - h0)
+    tol = 1 / 3600                                    # 1 s, for rounding of t_mid -/+ dt/2
+    return np.where((h0 >= -tol) & (h1 <= n + tol), mean_ap, np.nan)
+
+
+def lag_sweep(df, hourly, lags_hours=LAGS_HOURS, n_boot=999, seed=0, **dml_kw):
+    """DML with the treatment built from ap lag_hours earlier, for each lag.
+
+    df: from prepare. Rows whose shifted window leaves the hourly series at any lag
+    are dropped from every lag, so all lags use the same rows. Returns a DataFrame
+    indexed by lag (hours) with coef, se_cr1, se_boot, ci_lo, ci_hi, model_y, model_t
+    (helper models are re-selected per lag), n_rows and n_dropped.
+    """
+    shifted = {lag: ap_mean_shifted(df, hourly, lag) for lag in lags_hours}
+    ok = np.logical_and.reduce([~np.isnan(v) for v in shifted.values()])
+    rows = {}
+    for lag in lags_hours:
+        sub = df[ok].assign(ap_mean=shifted[lag][ok])
+        r = dml(sub, n_boot=n_boot, seed=seed, **dml_kw)
+        rows[lag] = {k: r[k] for k in ["coef", "se_cr1", "se_boot", "ci_lo", "ci_hi", "model_y", "model_t"]}
+        rows[lag].update(n_rows=int(ok.sum()), n_dropped=int((~ok).sum()))
+    return pd.DataFrame(rows).T.rename_axis("lag_hours")
 
 
 def compare(table, outcome="Y_residual", n_folds=5, n_boot=999, seed=0, all_t_models=True):

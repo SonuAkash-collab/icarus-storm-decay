@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -109,3 +110,38 @@ def test_naive_is_fooled_by_sun_uv(result, planted):
 def test_dml_covers_planted_in_90_percent_of_50_seeds():
     runs = dml.seed_study(n_seeds=50)
     assert runs["dml_covers"].sum() >= 45
+
+
+@pytest.fixture(scope="module")
+def fake_hourly():
+    table, _, hourly = make_synthetic(n_objects=200, seed=0, return_hourly=True)
+    return dml.prepare(table), hourly
+
+
+def test_ap_mean_shifted_rebuilds_treatment(fake_hourly):
+    df, hourly = fake_hourly
+    np.testing.assert_allclose(dml.ap_mean_shifted(df, hourly, 0), df["ap_mean"], atol=1e-6)
+
+
+def test_ap_mean_shifted_is_nan_outside_the_series(fake_hourly):
+    # a 24 h lag has no ap before the series starts: those rows must be NaN, not wrapped
+    df, hourly = fake_hourly
+    lagged = dml.ap_mean_shifted(df, hourly, 24)
+    half = pd.to_timedelta(df["dt_days"] / 2, unit="D")
+    starts_early = (df["t_mid"] - half - pd.Timedelta(hours=24) < hourly.index[0]).to_numpy()
+    assert starts_early.any()
+    assert np.isnan(lagged[starts_early]).all() and not np.isnan(lagged[~starts_early]).any()
+    assert not np.isnan(dml.ap_mean_shifted(df, hourly, 0)).any()
+
+
+def test_lag_sweep_peaks_at_main_lag(fake_hourly):
+    # synthetic data plants the effect on same-interval ap, so lag 0 must be strongest
+    df, hourly = fake_hourly
+    fast = {"model_y": "xgb", "model_t": "linear"}
+    sweep = dml.lag_sweep(df, hourly, n_boot=0, **fast)
+    assert list(sweep.index) == list(dml.LAGS_HOURS)
+    # every lag uses the same rows: those with ap at the longest lag
+    ok = ~np.isnan(dml.ap_mean_shifted(df, hourly, max(dml.LAGS_HOURS)))
+    assert (sweep["n_rows"] == ok.sum()).all() and (sweep["n_dropped"] == (~ok).sum()).all()
+    assert sweep.loc[0, "coef"] == pytest.approx(dml.dml(df[ok], n_boot=0, **fast)["coef"])
+    assert sweep["coef"].astype(float).abs().idxmax() == dml.MAIN_LAG_HOURS == 0

@@ -34,6 +34,17 @@ Two things are removed before the windows are formed:
   causal graph). adjust_controls removes the F10.7, F10.7 81-day and season part
   of Y_residual, fitted on quiet rows of passive objects with object fixed effects.
   The active-minus-twin gap does not need it (same days on both sides).
+
+Outcome: Y_residual (model error) by default. On real data MSIS run with the actual
+ap already captures much of the storm, so the twins' loss in Y_residual can be near
+zero or positive. The real run therefore passes outcome= the total-effect column
+(observed minus the model run with pre-storm quiet ap), so the loss is the storm's
+whole orbit loss. Every function below reads the column named Y_residual;
+offset_ratio and debris_placebo copy `outcome` into it first.
+
+Precision: the ducking share is the headline. The recovery share has a long window
+and few clean storms, so it is reported as imprecise, with a 5-day recovery window
+as a sensitivity run (recovery_sensitivity).
 """
 
 import numpy as np
@@ -44,15 +55,16 @@ from src.schema import MAX_ECC, main_sample
 
 PRE = (-10, -3)               # days before main_onset
 RECOVERY_DAYS = 10
+SENSITIVITY_RECOVERY_DAYS = 5
 MATCH_VARS = ["alt_km", "inc_deg", "log_drag"]
 N_TWINS = 3
 CALIPER = 0.5                 # max standardised distance to a twin
 
 
-def contamination_windows(storms):
+def contamination_windows(storms, recovery_days=RECOVERY_DAYS):
     """(storm_id, start, end): a storm's active window plus the operators' recovery window."""
     start = storms[["onset_time", "main_onset"]].min(axis=1) if "onset_time" in storms else storms["main_onset"]
-    end = storms["recovery_end"] + pd.Timedelta(days=RECOVERY_DAYS) + ACTIVE_MARGIN
+    end = storms["recovery_end"] + pd.Timedelta(days=recovery_days) + ACTIVE_MARGIN
     return list(zip(storms["storm_id"], start - ACTIVE_MARGIN, end))
 
 
@@ -90,25 +102,26 @@ def _clean_actives(table, max_ecc=MAX_ECC):
                  & table["drag_sensitivity"].notna()]
 
 
-def windows_for(storm):
+def windows_for(storm, recovery_days=RECOVERY_DAYS):
     """(name, start, end) of the three windows of one storm (dict with main_onset, recovery_end)."""
     onset, rec = storm["main_onset"], storm["recovery_end"]
     return [("pre", onset + pd.Timedelta(days=PRE[0]), onset + pd.Timedelta(days=PRE[1])),
             ("ducking", onset, rec),
-            ("recovery", rec, rec + pd.Timedelta(days=RECOVERY_DAYS))]
+            ("recovery", rec, rec + pd.Timedelta(days=recovery_days))]
 
 
-def window_rates(rows, storm, min_cover=0.5):
+def window_rates(rows, storm, min_cover=0.5, recovery_days=RECOVERY_DAYS):
     """Per object: time-weighted mean Y_residual and covered days in each window.
     Objects covering less than min_cover of any window are left out."""
     out = []
-    for name, start, end in windows_for(storm):
+    windows = windows_for(storm, recovery_days)
+    for name, start, end in windows:
         w = rows[(rows["t_mid"] >= start) & (rows["t_mid"] < end)]
         g = w.assign(yw=w["Y_residual"] * w["dt_days"]).groupby("norad_id")
         out.append(pd.DataFrame({f"{name}": g["yw"].sum() / g["dt_days"].sum(),
                                  f"{name}_days": g["dt_days"].sum()}))
     rates = pd.concat(out, axis=1)
-    lengths = {name: (end - start) / pd.Timedelta(days=1) for name, start, end in windows_for(storm)}
+    lengths = {name: (end - start) / pd.Timedelta(days=1) for name, start, end in windows}
     ok = np.all([rates[f"{n}_days"] >= min_cover * lengths[n] for n in lengths], axis=0)
     return rates[ok], lengths
 
@@ -160,7 +173,7 @@ def balance(matched):
 
 
 def storm_pairs(table, storms, actives=None, passives=None, n_twins=N_TWINS, caliper=CALIPER,
-                min_cover=0.5):
+                min_cover=0.5, recovery_days=RECOVERY_DAYS):
     """One row per (storm, active) with loss, duck_gain, recovery_gain (m) and the twins used.
 
     actives / passives: tables of candidate rows (default: clean active satellites and
@@ -169,7 +182,7 @@ def storm_pairs(table, storms, actives=None, passives=None, n_twins=N_TWINS, cal
     """
     actives = _clean_actives(table) if actives is None else actives
     passives = main_sample(table) if passives is None else passives
-    win = contamination_windows(storms)
+    win = contamination_windows(storms, recovery_days)
     out, bal = [], []
     for s in storms.to_dict("records"):
         def clean(rows):
@@ -179,8 +192,8 @@ def storm_pairs(table, storms, actives=None, passives=None, n_twins=N_TWINS, cal
                     dirty |= (rows["t_mid"] >= start) & (rows["t_mid"] <= end)
             return rows[~dirty]
         a_rows, p_rows = clean(actives), clean(passives)
-        a_rates, lengths = window_rates(a_rows, s, min_cover)
-        p_rates, _ = window_rates(p_rows, s, min_cover)
+        a_rates, lengths = window_rates(a_rows, s, min_cover, recovery_days)
+        p_rates, _ = window_rates(p_rows, s, min_cover, recovery_days)
         fa = object_features(a_rows, s).reindex(a_rates.index).dropna()
         fp = object_features(p_rows, s).reindex(p_rates.index).dropna()
         if fa.empty or len(fp) < n_twins:
@@ -227,10 +240,11 @@ def bootstrap(pairs, n_boot=999, seed=0):
                          "se": draws.std(ddof=1)})
 
 
-def offset_ratio(table, storms, n_boot=999, seed=0, **kw):
-    """Full pipeline on the analysis table. Returns (summary, pairs, smd) where smd is
-    the balance of the matching variables (see balance)."""
-    table, coef = adjust_controls(table, storms)
+def offset_ratio(table, storms, outcome="Y_residual", n_boot=999, seed=0, **kw):
+    """Full pipeline on the analysis table. outcome: column measuring the orbit loss
+    (see the module notes). Returns (summary, pairs, smd) where smd is the balance of
+    the matching variables (see balance)."""
+    table, coef = adjust_controls(table.assign(Y_residual=table[outcome]), storms)
     pairs, matched = storm_pairs(table, storms, **kw)
     if pairs["storm_id"].nunique() < 2:
         raise ValueError("Fewer than 2 storms with matched pairs")
@@ -239,7 +253,19 @@ def offset_ratio(table, storms, n_boot=999, seed=0, **kw):
     summary.attrs["n_storms"] = pairs["storm_id"].nunique()
     summary.attrs["n_actives"] = pairs["active"].nunique()
     summary.attrs["controls"] = coef
+    summary.attrs["outcome"] = outcome
     return summary, pairs, balance(matched)
+
+
+def recovery_sensitivity(table, storms, days=(RECOVERY_DAYS, SENSITIVITY_RECOVERY_DAYS), n_boot=999,
+                         seed=0, **kw):
+    """Shares with each recovery window length, stacked (index: recovery_days, share).
+    A shorter window keeps more clean storms but only counts the climb-back in it."""
+    out = {}
+    for d in days:
+        summary, _, _ = offset_ratio(table, storms, n_boot=n_boot, seed=seed, recovery_days=d, **kw)
+        out[d] = summary.assign(n_storms=summary.attrs["n_storms"])
+    return pd.concat(out, names=["recovery_days", "share"])
 
 
 def placebo_distribution(table, storms, n_reps=20, seed=0, **kw):
@@ -258,11 +284,11 @@ def placebo_distribution(table, storms, n_reps=20, seed=0, **kw):
     return pd.DataFrame(rows)
 
 
-def debris_placebo(table, storms, n_fake=None, n_boot=199, seed=0, **kw):
+def debris_placebo(table, storms, n_fake=None, outcome="Y_residual", n_boot=199, seed=0, **kw):
     """Debris-vs-debris placebo: random passive objects pose as actives, matched to the
     other passives. They cannot manoeuvre, so the offset ratio should be ~0."""
     rng = np.random.default_rng(seed)
-    table, _ = adjust_controls(table, storms)
+    table, _ = adjust_controls(table.assign(Y_residual=table[outcome]), storms)
     passive = main_sample(table)
     ids = passive["norad_id"].unique()
     n_fake = n_fake or max(10, len(ids) // 5)

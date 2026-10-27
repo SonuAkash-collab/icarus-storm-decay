@@ -83,3 +83,23 @@ def test_debris_placebo_centres_on_zero(fake):
     # The real ducking share is far outside the placebo spread
     real = orr.offset_ratio(*fake, n_boot=9)[0].loc["ducking_share", "est"]
     assert real > dist["ducking_share"].mean() + 2 * dist["ducking_share"].std()
+
+
+def test_outcome_argument(fake):
+    table, storms = fake
+    renamed = table.rename(columns={"Y_residual": "Y_total"}).assign(Y_residual=0.0)
+    a = orr.offset_ratio(table, storms, n_boot=9)[0]
+    b = orr.offset_ratio(renamed, storms, outcome="Y_total", n_boot=9)[0]
+    pd.testing.assert_frame_equal(a, b)
+    assert b.attrs["outcome"] == "Y_total"
+
+
+def test_recovery_sensitivity(fake, noise_free):
+    out = orr.recovery_sensitivity(*noise_free, n_boot=9)
+    assert set(out.index.get_level_values("recovery_days")) == {10, 5}
+    truth = fake[0].attrs["truth"]
+    # Ducking share does not depend on the recovery window; a 5-day window counts
+    # about half of the evenly spread 10-day climb
+    assert out.loc[(5, "ducking_share"), "est"] == pytest.approx(truth["duck_share"], abs=0.07)
+    assert out.loc[(5, "recovery_share"), "est"] == pytest.approx(truth["recovery_share"] / 2, abs=0.07)
+    assert out.xs(5)["n_storms"].iloc[0] >= out.xs(10)["n_storms"].iloc[0]

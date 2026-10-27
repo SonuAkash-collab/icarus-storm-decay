@@ -95,6 +95,12 @@ def test_curved_uv_error_fools_linear_controls():
     assert hot.groupby(hot["alt_km"] > 600)["true_uv_error"].mean().diff().iloc[-1] < 0
 
 
+def test_curved_uv_error_fades_at_high_altitude():
+    table, _ = make_synthetic(n_objects=60, n_high_alt=15, uv_error_kind="curved", seed=4)
+    err = table["true_uv_error"].abs().groupby(table["alt_km"] >= 1000).mean()
+    assert err[True] < 0.1 * err[False]
+
+
 def test_default_uv_error_is_linear(fake):
     t = fake[0]
     np.testing.assert_allclose(t["true_uv_error"], t.attrs["truth"]["gamma"] * (t["f107"] - 150))

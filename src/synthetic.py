@@ -3,13 +3,16 @@
 The table has the exact columns of src/schema.py, plus the planted truth:
     true_tau          storm effect of this object (m/day per nT of ap above quiet), >= 0
     true_effect       storm part of Y_residual (m/day) = -true_tau * (mean ap - AP_QUIET)
-    true_manoeuvre    operator part of Y_residual (m/day), 0 for passive objects
+    true_manoeuvre    operator storm response in Y_residual (m/day), 0 for passive objects
+    true_station_keeping  routine operator boosts in Y_residual (m/day, constant per
+                      active satellite), 0 for passive objects
     true_artifact     TLE-fit part of Y_residual (m/day), 0 for clean intervals
+    true_uv_error     Sun UV model error in Y_residual (m/day), the confounding term
 A method passes if it recovers these from the schema columns alone.
 
 How the fake world works:
-- Sun UV: f107_81d follows a slow yearly wave, f107 adds the 27-day solar rotation
-  and day-to-day noise.
+- Sun UV: f107_81d follows a slow solar-cycle decline plus a ~150-day wave, f107
+  adds the 27-day solar rotation and day-to-day noise.
 - Storms: main_onset days are drawn with probability rising with F10.7 (and a little
   near the equinoxes), so storms come with high Sun UV: this is the confounding.
   Each storm has a class (moderate/strong/severe/extreme in the real 11/6/2/1 mix),
@@ -26,15 +29,33 @@ How the fake world works:
   * some intervals are bad fits, more often during storms, with a fake drop
     (mostly negative, so it looks like extra storm decay); they get tle_ok = 0.
   schema.main_sample removes both; using every row biases the storm effect.
-- Residual (m/day) = object offset + UV model error (gamma * (f107 - 150))
-                     + season wave + true_effect + true_manoeuvre + noise.
+- UV model error: linear by default, gamma * (f107 - 150). With uv_error="curved" it
+  grows with altitude and saturates at high F10.7,
+      gamma * ((alt_km - 300) / 300)^2 * UV_SATURATION * tanh((f107 - 150) / UV_SATURATION),
+  as MSIS's UV error varies with altitude. Linear F10.7 controls then leave part of
+  the confounding in (the effect comes out ~10% too small), while a flexible model
+  (DML) can remove it. The altitude factor averages about 1 over 400-800 km, so
+  both versions have about the same strength.
+- Residual (m/day) = object offset + UV model error
+                     + season wave + true_effect + true_manoeuvre
+                     + true_station_keeping + noise.
   true_tau shrinks with altitude (thinner air higher up) and grows with drag
   sensitivity, so the effect differs by altitude as the vulnerability map expects.
 - Active satellites: during the storm (main_onset to recovery_end) operators cut
   duck_share of the storm effect; in the next RECOVERY_DAYS they win back
   recover_share of what was still lost. NO_DRAG_FIT of them have no
-  drag_sensitivity (manoeuvres spoil the quiet-time fit). Total offset ratio = duck_share +
+  drag_sensitivity (manoeuvres spoil the quiet-time fit), and every one does
+  routine station keeping (a constant boost, STATION_KEEPING m/day) that has
+  nothing to do with storms. Total offset ratio = duck_share +
   (1 - duck_share) * recover_share.
+- High-altitude control (n_high_alt > 0): extra passive, near-circular objects at
+  1,000-1,500 km. The air there is so thin that their planted storm effect is about
+  zero, but they share the Sun UV error, season wave and TLE bad fits, so a method
+  should find no storm effect for them. They come from their own random generator,
+  so adding them leaves the rest of the table unchanged.
+- return_hourly=True also returns the hourly space weather (ap, f107, f107_81d,
+  indexed by time) in the format of omni_io.load_spaceweather(), for methods that
+  need ap lags.
 """
 
 import numpy as np
@@ -56,7 +77,10 @@ APSIDAL_DAYS = 60.0                  # period of the perigee swing
 BAD_FIT_QUIET = 0.02                 # share of bad TLE fits on quiet days ...
 BAD_FIT_STORM = 0.10                 # ... and inside storm windows
 BAD_FIT_JUMP = (-40.0, 20.0)         # mean and sd of the fake jump (m/day)
+STATION_KEEPING = (0.5, 3.0)         # m/day of routine boosts per active satellite
 NO_DRAG_FIT = 0.2                    # share of active satellites without drag_sensitivity
+HIGH_ALT_KM = (1000.0, 1500.0)       # altitude range of the high-altitude control group
+UV_SATURATION = 40.0                 # sfu: the curved UV error flattens beyond about this far from 150
 INCLINATIONS = [51.6, 53.0, 65.0, 72.0, 82.0, 87.0, 98.0]
 
 
@@ -130,6 +154,42 @@ def make_objects(n_objects, active_share, rng):
     })
 
 
+def make_high_alt_objects(n_objects, first_id, rng):
+    """Passive, near-circular (ecc < 0.01) objects at HIGH_ALT_KM, same columns as make_objects."""
+    inc = rng.choice(INCLINATIONS, n_objects) + rng.normal(0, 0.3, n_objects)
+    return pd.DataFrame({
+        "norad_id": first_id + np.arange(n_objects),
+        "alt_km": rng.uniform(*HIGH_ALT_KM, n_objects),
+        "inc_deg": np.clip(inc, 0, 180),
+        "local_solar_time": rng.uniform(0, 24, n_objects),
+        "drag_sensitivity": rng.lognormal(np.log(0.01), 0.5, n_objects),
+        "is_active": np.zeros(n_objects, dtype="int64"),
+        "ecc": np.clip(rng.lognormal(np.log(0.002), 0.5, n_objects), 0, 0.009),
+        "phase": rng.uniform(0, 2 * np.pi, n_objects),
+        "offset": rng.normal(0, 2.0, n_objects),
+    })
+
+
+def hourly_spaceweather(flux, ap):
+    """Hourly ap, f107, f107_81d indexed by time, like omni_io.load_spaceweather()."""
+    daily = flux.reindex(ap.index.floor("D"))
+    out = pd.DataFrame({"ap": ap.to_numpy(), "f107": daily["f107"].to_numpy(),
+                        "f107_81d": daily["f107_81d"].to_numpy()}, index=ap.index)
+    out.index.name = "time"
+    return out
+
+
+def uv_error(f107, alt_km, gamma, kind="linear"):
+    """Sun UV model error (m/day): linear in F10.7, or curved (grows with altitude,
+    saturates at high F10.7)."""
+    x = np.asarray(f107) - 150
+    if kind == "linear":
+        return gamma * x
+    if kind == "curved":
+        return gamma * ((np.asarray(alt_km) - 300) / 300) ** 2 * UV_SATURATION * np.tanh(x / UV_SATURATION)
+    raise ValueError(f"uv_error must be 'linear' or 'curved', not {kind!r}")
+
+
 def storm_effect_per_ap(alt_km, drag_sensitivity, tau0, scale_km):
     """Planted effect (m/day per nT): tau0 at 400 km and B = 0.01 m^2/kg, falling with altitude."""
     return tau0 * np.exp(-(np.asarray(alt_km) - 400) / scale_km) * (np.asarray(drag_sensitivity) / 0.01)
@@ -153,14 +213,18 @@ def intervals(storms, rng, start=START, end=END):
 
 def make_synthetic(n_objects=200, n_storms=20, storms=None, active_share=0.15,
                    tau0=0.05, scale_km=150.0, gamma=-0.12, noise=3.0,
-                   duck_share=0.3, recover_share=0.5, seed=0):
+                   duck_share=0.3, recover_share=0.5, n_high_alt=0, return_hourly=False,
+                   uv_error_kind="linear", seed=0):
     """Fake analysis table in the schema format, and the storm catalog used.
 
     tau0: storm effect at 400 km (m/day per nT of ap); scale_km: how fast it fades
     with altitude; gamma: UV model error (m/day per sfu; the confounding strength);
     noise: residual noise (m/day for a 1-day interval); duck_share, recover_share:
-    operator offset of active satellites. Returns (table, storms); the planted
-    settings are in table.attrs["truth"].
+    operator offset of active satellites; n_high_alt: number of extra passive objects
+    at 1,000-1,500 km (the high-altitude control, 10-20 is a realistic count);
+    uv_error_kind: "linear" (default) or "curved" Sun UV model error (see above).
+    Returns (table, storms), or (table, storms, hourly) with return_hourly=True; the
+    planted settings are in table.attrs["truth"].
     """
     rng = np.random.default_rng(seed)
     days = pd.date_range(START, END, freq="D")
@@ -178,11 +242,29 @@ def make_synthetic(n_objects=200, n_storms=20, storms=None, active_share=0.15,
         return np.interp((t - START).total_seconds().to_numpy() / 3600, grid, cum)
 
     objects = make_objects(n_objects, active_share, rng)
+    # Routine station keeping of active satellites (own generator, so adding it did
+    # not change the other random draws of a seed)
+    sk = np.random.default_rng([seed, 1]).uniform(*STATION_KEEPING, n_objects)
+    objects["station_keeping"] = np.where(objects["is_active"] == 1, sk, 0.0)
+    # High-altitude control group: own generator for every draw, so the rest is unchanged
+    hrng = np.random.default_rng([seed, 2])
+    high = make_high_alt_objects(n_high_alt, 90000 + n_objects, hrng).assign(station_keeping=0.0)
     rows = []
     for obj in objects.to_dict("records"):
         t0, t1 = intervals(storms, rng)
         rows.append(pd.DataFrame({"norad_id": obj["norad_id"], "t_start": t0, "t_end": t1}))
-    df = pd.concat(rows, ignore_index=True).merge(objects, on="norad_id")
+    for obj in high.to_dict("records"):
+        t0, t1 = intervals(storms, hrng)
+        rows.append(pd.DataFrame({"norad_id": obj["norad_id"], "t_start": t0, "t_end": t1}))
+    df = pd.concat(rows, ignore_index=True).merge(pd.concat([objects, high], ignore_index=True),
+                                                  on="norad_id")
+    # Row-level random draws: main objects from rng (in the original order), the
+    # high-altitude rows (last in df) from hrng
+    n_main = int((df["norad_id"] < 90000 + n_objects).sum())
+
+    def draw(method, *args):
+        main = getattr(rng, method)(*args, n_main)
+        return np.concatenate([main, getattr(hrng, method)(*args, len(df) - n_main)])
 
     df["dt_days"] = (df["t_end"] - df["t_start"]) / pd.Timedelta(days=1)
     df["t_mid"] = df["t_start"] + (df["t_end"] - df["t_start"]) / 2
@@ -198,6 +280,7 @@ def make_synthetic(n_objects=200, n_storms=20, storms=None, active_share=0.15,
     df["true_effect"] = -df["true_tau"] * (df["T_ap_int"] / df["dt_days"] - AP_QUIET)
 
     # Operators: duck during the storm, recover in the following days
+    df["true_station_keeping"] = df["station_keeping"]
     df["true_manoeuvre"] = 0.0
     active = df["is_active"] == 1
     for s in storms.to_dict("records"):
@@ -215,36 +298,43 @@ def make_synthetic(n_objects=200, n_storms=20, storms=None, active_share=0.15,
     days_in = (df["t_mid"] - START) / pd.Timedelta(days=1)
     swing = np.where(df["ecc"] >= 0.01,
                      ECC_SWING * df["ecc"] * np.sin(2 * np.pi * days_in / APSIDAL_DAYS + df["phase"]), 0)
-    bad = rng.random(len(df)) < np.where(df["T_storm"] == 1, BAD_FIT_STORM, BAD_FIT_QUIET)
-    jump = np.where(bad, rng.normal(*BAD_FIT_JUMP, len(df)), 0)
+    bad = draw("random") < np.where(df["T_storm"] == 1, BAD_FIT_STORM, BAD_FIT_QUIET)
+    jump = np.where(bad, draw("normal", *BAD_FIT_JUMP), 0)
     df["tle_ok"] = (~bad).astype("int64")
     df["true_artifact"] = swing + jump
 
     season = 1.0 * np.sin(2 * np.pi * df["day_of_year"] / 365.25)
-    df["Y_residual"] = (df["offset"] + gamma * (df["f107"] - 150) + season
+    df["true_uv_error"] = uv_error(df["f107"], df["alt_km"], gamma, uv_error_kind)
+    df["Y_residual"] = (df["offset"] + df["true_uv_error"] + season
                         + df["true_effect"] + df["true_manoeuvre"] + df["true_artifact"]
-                        + rng.normal(0, noise, len(df)) / np.sqrt(df["dt_days"]))
+                        + df["true_station_keeping"]
+                        + draw("normal", 0, noise) / np.sqrt(df["dt_days"]))
 
     # NRLMSISE-00 version: same truth, a slightly different model error (it runs hotter
     # at high Sun UV) and its own fit noise
     df["Y_residual_nrl"] = (df["Y_residual"] + 0.02 * (df["f107"] - 150)
-                            + rng.normal(0, 0.5 * noise, len(df)) / np.sqrt(df["dt_days"]))
+                            + draw("normal", 0, 0.5 * noise) / np.sqrt(df["dt_days"]))
 
     # Physics-model prediction (m/day, negative) only to build the log ratio
     predicted = -60 * np.exp(-(df["alt_km"] - 400) / 60) * (df["drag_sensitivity"] / 0.01) * df["f107"] / 150
     observed = predicted + df["Y_residual"]
     df["Y_log_ratio"] = np.log((observed / predicted).where(observed < 0))
+    # Predicted decay is ~0 at high altitude, so the ratio means nothing there
+    df.loc[df["alt_km"] >= HIGH_ALT_KM[0], "Y_log_ratio"] = np.nan
 
     # Some active satellites have no usable quiet-time fit (manoeuvres), as in real data
     no_fit = objects.loc[(objects["is_active"] == 1) & (rng.random(n_objects) < NO_DRAG_FIT), "norad_id"]
     df.loc[df["norad_id"].isin(no_fit), "drag_sensitivity"] = np.nan
 
-    df = df.drop(columns=["t_start", "t_end", "offset", "phase"]).sort_values(["norad_id", "t_mid"])
+    df = df.drop(columns=["t_start", "t_end", "offset", "phase", "station_keeping"]).sort_values(["norad_id", "t_mid"])
     table = validate(df.reset_index(drop=True))
     table.attrs["truth"] = {"tau0": tau0, "scale_km": scale_km, "gamma": gamma,
                             "duck_share": duck_share, "recover_share": recover_share,
+                            "recovery_share": (1 - duck_share) * recover_share,
                             "offset_ratio": duck_share + (1 - duck_share) * recover_share,
-                            "ap_quiet": AP_QUIET, "seed": seed}
+                            "ap_quiet": AP_QUIET, "n_high_alt": n_high_alt, "uv_error": uv_error_kind, "seed": seed}
+    if return_hourly:
+        return table, storms, hourly_spaceweather(flux, ap)
     return table, storms
 
 

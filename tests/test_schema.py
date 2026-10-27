@@ -104,6 +104,14 @@ def test_main_sample_filters():
     assert report["ecc >= 0.01"] == 1 and report["TLE failed cleaning"] == 1 and report["kept"] == 1
 
 
+def test_high_alt_split():
+    df = tiny_table().assign(alt_km=[550.0, 1000.0, 1200.0])
+    assert list(schema.main_sample(df)["alt_km"]) == [550.0]
+    assert list(schema.high_alt_sample(df)["alt_km"]) == [1000.0, 1200.0]
+    report = schema.sample_report(df).set_index("filter")["removed"]
+    assert report["high-altitude control (alt >= 1000 km)"] == 2 and report["kept"] == 1
+
+
 def test_active_may_lack_drag_sensitivity():
     df = tiny_table().assign(is_active=1, drag_sensitivity=[np.nan, 0.01, 0.01])
     assert schema.problems(df) == []

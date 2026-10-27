@@ -69,17 +69,21 @@ def contamination_windows(storms, contam="active"):
 
 
 def build_stacks(table, storms, window=EVENT_WINDOW, contam="active",
-                 min_pre_days=3, min_post_days=5):
+                 min_pre_days=3, min_post_days=5, others=None, self_contam=True):
     """Stacked rows with clean controls.
 
     table: analysis table (already restricted to the rows to use, e.g. main_sample);
     storms: catalog with storm_id, main_onset. Returns (stacked, report):
     stacked has the table columns plus stack (storm_id of the stack) and k (whole
     event day); report has one row per storm with rows kept / dropped and whether
-    the storm was used.
+    the storm was used. others: extra storms (same columns) that only contaminate,
+    e.g. the real storms when `storms` are placebo dates. self_contam=False stops the
+    stacked storms from contaminating each other (placebo dates have no effect).
     """
     lo, hi = window
-    windows = contamination_windows(storms, contam)
+    windows = contamination_windows(storms, contam) if self_contam else []
+    if others is not None:
+        windows += [(None, start, end) for _, start, end in contamination_windows(others, contam)]
     onsets = storms.set_index("storm_id")["main_onset"]
     t_mid = table["t_mid"]
     parts, rows = [], []
@@ -164,16 +168,20 @@ def fit(stacked, outcome="Y_residual", ref=-1, window=EVENT_WINDOW, n_boot=999, 
     scores = np.zeros((G, p))
     np.add.at(scores, cl_idx, A * resid[:, None])
     cr1 = G / (G - 1) * (n - 1) / (n - p) * bread @ (scores.T @ scores) @ bread
-    se_cr1 = np.sqrt(np.diag(cr1))
+    se_cr1 = np.sqrt(np.clip(np.diag(cr1), 0, None))
 
     # Wild cluster bootstrap: flip whole-storm residual blocks with Webb weights
+    # (n_boot=0 skips it, for fast placebo runs)
     rng = np.random.default_rng(seed)
     draws = np.empty((n_boot, p))
     for b in range(n_boot):
         v = rng.choice(WEBB, size=G)[cl_idx]
         draws[b] = P @ (fitted + resid * v)
-    se_boot = draws.std(axis=0, ddof=1)
-    lo_q, hi_q = np.percentile(draws - beta, [97.5, 2.5], axis=0)
+    if n_boot > 1:
+        se_boot = draws.std(axis=0, ddof=1)
+        lo_q, hi_q = np.percentile(draws - beta, [97.5, 2.5], axis=0)
+    else:
+        se_boot = lo_q = hi_q = np.full(p, np.nan)
 
     nk = len(ks)
     per_k = stacked.groupby("k").agg(n_rows=("k", "size"), n_storms=("stack", "nunique"))
@@ -193,11 +201,16 @@ def event_study(table, storms, outcome="Y_residual", use_main_sample=True, exclu
     """Full pipeline: sample -> stacks with clean controls -> fit.
 
     exclude_storms: storm_ids to leave out (e.g. May and Oct 2024 for the robustness
-    run). Returns (result, report); see fit and build_stacks.
+    run). They get no stack but still contaminate, so rows inside them never become
+    clean controls for their neighbours. Returns (result, report); see fit and build_stacks.
     """
     if use_main_sample:
         table = main_sample(table)
-    storms = storms[~storms["storm_id"].isin(exclude_storms)]
+    excluded = storms["storm_id"].isin(exclude_storms)
+    if excluded.any():
+        others = stack_kw.get("others")
+        stack_kw["others"] = pd.concat([others, storms[excluded]]) if others is not None else storms[excluded]
+    storms = storms[~excluded]
     stacked, report = build_stacks(table, storms, window, contam, **stack_kw)
     if report["used"].sum() < 2:
         raise ValueError(f"Only {report['used'].sum()} clean storms left with contam={contam!r}")

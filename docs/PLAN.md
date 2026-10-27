@@ -27,6 +27,13 @@ synthetic data.
 | #3 | B4-B5 prototype: NRLMSISE-00 / MSIS 2.1 residuals for two rocket bodies |
 | #4 | Step 0: shared analysis-table schema |
 | #5 | Synthetic generator, causal graph, schema follow-ups |
+| #6 | Stacked event study with clean controls (synthetic data) |
+| #10 | This planning file |
+
+**Not on `main` yet:** #7 (event-study checks) and #8 (offset ratio) were merged into
+the `causal-event-study` branch, and #9 (high-altitude group, hourly ap) into
+`causal-offset-ratio`, after #6 had already gone to `main`. They come to `main` in one
+follow-up PR from C together with the review fixes below.
 
 ## A: Piyush (orbit data)
 
@@ -51,6 +58,8 @@ synthetic data.
         the storm from Sun UV;
     (b) model error = observed minus MSIS 2.1 with actual ap (current `Y_residual`).
   - Report both, with and without the May 2024 and Oct 2024 storms.
+  - Save (a) as its own column (proposed name `Y_total`, m/day): the offset ratio
+    needs it for the storm loss.
 - [ ] **B3 object catalog** (`src/objects.py`, branch `B3-objects`): CelesTrak SATCAT
       type, launch date, decay date; `is_active` (payloads with detected maneuvers in
       the year = active; debris, rocket bodies and payloads without maneuvers =
@@ -70,20 +79,32 @@ synthetic data.
 
 ## C: Siddhant Anil (event study and offset ratio, `causal-event-offset`)
 
-- [ ] **Synthetic additions** (`src/synthetic.py`):
-  - option for a high-altitude group (1,000-1,500 km) in `make_objects` / `make_synthetic`;
-  - option to also return the hourly space weather as a frame in the same format as
-    `omni_io.load_spaceweather()` (time index; `ap`, `f107`, `f107_81d`), so lag code
-    runs the same on real and synthetic data. Not in `table.attrs`: `save_table`
-    writes attrs to Parquet and a Series there can break saving.
-- [ ] **Event study** (`src/event_study.py`): stacked, with clean controls (objects or
-      days not inside any other storm's -10..+20 window); drop contaminated windows and
-      report how many. Checks: recovers the planted effect, flat pre-trends, 500
-      placebo storm dates centre on zero, with and without May/Oct 2024.
-- [ ] **Offset ratio** (`src/offset_ratio.py`): actives matched to passive twins on
-      altitude, inclination and `drag_sensitivity`; subtract each active satellite's
-      own station-keeping rate on days -10..-3. Windows: ducking (onset to
-      recovery end) and recovery (next ~10 days). Debris-vs-debris placebo (offset ~0).
+- [x] **Synthetic additions** (#9, not on `main` yet): `n_high_alt` (1,000-1,500 km
+      group) and `return_hourly` (hourly frame in the format of
+      `omni_io.load_spaceweather()`, not in `table.attrs`).
+- [x] **Event study** (#6, on `main`): stacked, clean controls, CR1 + wild cluster
+      bootstrap by storm.
+- [x] **Event-study checks** (#7, not on `main` yet): planted recovery, placebo-based
+      pre-trend test, 500 placebo dates, with/without May/Oct 2024.
+- [x] **Offset ratio** (#8, not on `main` yet): matched twins, station keeping removed
+      via days -10..-3, ducking and recovery windows, debris placebo.
+- [ ] **Follow-up PR to `main`** bringing #7-#9 in, with these fixes:
+  - `event_study(exclude_storms=...)` must still treat the excluded storms as
+    contaminating (pass them to `build_stacks(..., others=...)`). Now 2,713 rows
+    from inside the excluded storms become clean controls (synthetic, seed 0).
+  - `main_sample()` must drop rows above 1,000 km (6,140 of 37,312 rows got in with
+    `n_high_alt=15`); add `high_alt_sample()` for the control.
+  - `Y_log_ratio` NaN for the high-altitude group (it comes out at a median of ~11).
+  - `offset_ratio(..., outcome=)` argument. On real data the storm loss must use the
+    total storm effect (`Y_total` from B), not `Y_residual`: `Y_residual` is model
+    error, and MSIS already follows most of the storm.
+  - Docstring nit: `f107_81d` is no longer a yearly wave.
+- [ ] **Sensitivity runs**: event study with `contam=(-3, 10)` as well as the default
+      `"active"` (our headline is slow recovery, which can leak into the next storm's
+      pre-period); offset ratio with a 5-day recovery window as well as 10 days.
+- [ ] **Curved confounder option** in `make_synthetic`: UV model error that grows with
+      altitude and saturates at high F10.7. Default stays linear so existing tests
+      don't move.
 - [ ] **Paper**: intro, data/physics setup, DAG, event study, offset ratio.
 
 ## D: Sidhant Holla (double ML and vulnerability map, `causal-dml-forest`)
@@ -97,6 +118,17 @@ synthetic data.
   - Cross-fitting folds by storm / time block, never by row: each storm's whole
     -10..+20 window in one fold; quiet periods in their own time blocks.
   - Wild cluster bootstrap on the final residual-on-residual stage, nuisance fits fixed.
+  - Helper (nuisance) models, rule fixed before any real-data run: for the ap model
+    and the residual model separately, try a straight line, a cautious XGBoost
+    (shallow, heavily regularised) and a flexible XGBoost; keep the one with the best
+    prediction on held-out storms, measured on the same storm-blocked folds as the
+    cross-fitting (never random rows). Report the estimate under all three ap models.
+    Why: a flexible ap model had negative held-out R² (storm timing is close to
+    random once Sun and season are known), its errors added noise to the leftover ap
+    and pulled the estimate ~8% toward zero (coverage 41/50).
+  - Pass bar: the whole pipeline, selection included, covers the truth in at least
+    45 of 50 synthetic worlds, in both the linear and the curved-confounder world.
+    If naive and DML agree on real data, report it as robustness.
   - ap lags 0 / 6 / 12 / 24 h: main lag fixed in advance, all four reported.
 - [ ] **Refutations**: high-altitude group (>1,000 km) shows no effect, tested as
       equivalence (CI inside a pre-set band around zero), not just "not significant";
@@ -132,3 +164,13 @@ synthetic data.
   and clusters by storm / time block.
 - **Two estimands (Siddhant)**: total storm effect vs model error, both reported, with
   and without May/Oct 2024.
+- **Oct 27, review of #6-#9**: clean-control default `contam="active"` accepted (the
+  strict -10..+20 rule leaves 0 of 20 storms), with a `(-3, 10)` sensitivity run;
+  placebo p-values are the main inference for the event study (rows can sit in two
+  stacks); offset ratio headlines the ducking share, recovery share reported as
+  imprecise; offset-ratio storm loss to use the total storm effect. Fixes listed
+  under C.
+- **Oct 27, DML helper models (Holla)**: choose each helper model by held-out-storm
+  prediction from {straight line, cautious XGBoost, flexible XGBoost}; departs from
+  "XGBoost/CatBoost only" because the data picks the model. Coverage test reruns
+  with the rule in the loop. Curved confounder added to the synthetic world.

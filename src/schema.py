@@ -93,6 +93,7 @@ FORBIDDEN = ["bstar", "rho", "density", "air_density"]
 STORM_CLASSES = ["moderate", "strong", "severe", "extreme"]
 EVENT_WINDOW = (-10, 20)    # days around main_onset
 MAX_ECC = 0.01              # near-circular orbits only in the main analysis
+HIGH_ALT_MIN_KM = 1000.0    # objects at or above this are the high-altitude control, not the main sample
 NOT_NULL = ["norad_id", "t_mid", "dt_days", "alt_km", "inc_deg", "local_solar_time",
             "day_of_year", "ecc", "tle_ok", "is_active", "T_ap_int", "T_storm", "f107", "f107_81d"]
 
@@ -173,15 +174,27 @@ def validate(df):
     return coerce(df)
 
 
-def main_sample(df, max_ecc=MAX_ECC):
-    """Rows for the main analysis: passive objects, near-circular orbits, clean TLEs."""
-    return df[(df["is_active"] == 0) & (df["ecc"] < max_ecc) & (df["tle_ok"] == 1)
-              & df["drag_sensitivity"].notna()]
+def _clean_passive(df, max_ecc):
+    return ((df["is_active"] == 0) & (df["ecc"] < max_ecc) & (df["tle_ok"] == 1)
+            & df["drag_sensitivity"].notna())
 
 
-def sample_report(df, max_ecc=MAX_ECC):
+def main_sample(df, max_ecc=MAX_ECC, max_alt_km=HIGH_ALT_MIN_KM):
+    """Rows for the main analysis: passive objects below the high-altitude control,
+    near-circular orbits, clean TLEs."""
+    return df[_clean_passive(df, max_ecc) & (df["alt_km"] < max_alt_km)]
+
+
+def high_alt_sample(df, max_ecc=MAX_ECC, min_alt_km=HIGH_ALT_MIN_KM):
+    """Rows of the high-altitude control: the main-sample filters, but at or above
+    min_alt_km, where the storm effect should be about zero."""
+    return df[_clean_passive(df, max_ecc) & (df["alt_km"] >= min_alt_km)]
+
+
+def sample_report(df, max_ecc=MAX_ECC, max_alt_km=HIGH_ALT_MIN_KM):
     """How many rows each main-sample filter removes (count and share), applied in order."""
     steps = [("active satellite", df["is_active"] == 1),
+             (f"high-altitude control (alt >= {max_alt_km:g} km)", df["alt_km"] >= max_alt_km),
              (f"ecc >= {max_ecc}", df["ecc"] >= max_ecc),
              ("TLE failed cleaning", df["tle_ok"] == 0),
              ("no drag_sensitivity", df["drag_sensitivity"].isna())]

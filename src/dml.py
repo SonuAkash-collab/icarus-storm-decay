@@ -237,35 +237,38 @@ def ap_mean_shifted(df, hourly, shift_hours=0.0):
 
     hourly: hourly space weather with an `ap` column, indexed by hour (the format of
     omni_io.load_spaceweather() and make_synthetic(return_hourly=True)). Each value
-    covers the hour after its time stamp, as in make_synthetic. The series wraps
-    around its ends, so any shift stays defined; for the 0-24 h lags only the first
-    day of the series is affected.
+    covers the hour after its time stamp, as in make_synthetic. NaN where the shifted
+    window reaches outside the series (e.g. the first day of the year at a 24 h lag).
     """
     ap = hourly["ap"].to_numpy(float)
     n = len(ap)
     cum = np.concatenate([[0.0], np.cumsum(ap)])     # nT*h at each hour boundary
 
-    def integral(h):
-        # Integral of ap from the series start to h hours, wrapping around
-        k, r = np.divmod(h, n)
-        return k * cum[-1] + np.interp(r, np.arange(n + 1), cum)
-
     half = pd.to_timedelta(df["dt_days"] / 2, unit="D")
     h0 = ((df["t_mid"] - half - hourly.index[0]).dt.total_seconds() / 3600).to_numpy() - shift_hours
     h1 = ((df["t_mid"] + half - hourly.index[0]).dt.total_seconds() / 3600).to_numpy() - shift_hours
-    return (integral(h1) - integral(h0)) / (h1 - h0)
+    grid = np.arange(n + 1)
+    mean_ap = (np.interp(h1, grid, cum) - np.interp(h0, grid, cum)) / (h1 - h0)
+    tol = 1 / 3600                                    # 1 s, for rounding of t_mid -/+ dt/2
+    return np.where((h0 >= -tol) & (h1 <= n + tol), mean_ap, np.nan)
 
 
 def lag_sweep(df, hourly, lags_hours=LAGS_HOURS, n_boot=999, seed=0, **dml_kw):
     """DML with the treatment built from ap lag_hours earlier, for each lag.
 
-    df: from prepare. Returns a DataFrame indexed by lag (hours) with coef, se_cr1,
-    se_boot, ci_lo, ci_hi, model_y, model_t (helper models are re-selected per lag).
+    df: from prepare. Rows whose shifted window leaves the hourly series at any lag
+    are dropped from every lag, so all lags use the same rows. Returns a DataFrame
+    indexed by lag (hours) with coef, se_cr1, se_boot, ci_lo, ci_hi, model_y, model_t
+    (helper models are re-selected per lag), n_rows and n_dropped.
     """
+    shifted = {lag: ap_mean_shifted(df, hourly, lag) for lag in lags_hours}
+    ok = np.logical_and.reduce([~np.isnan(v) for v in shifted.values()])
     rows = {}
     for lag in lags_hours:
-        r = dml(df.assign(ap_mean=ap_mean_shifted(df, hourly, lag)), n_boot=n_boot, seed=seed, **dml_kw)
+        sub = df[ok].assign(ap_mean=shifted[lag][ok])
+        r = dml(sub, n_boot=n_boot, seed=seed, **dml_kw)
         rows[lag] = {k: r[k] for k in ["coef", "se_cr1", "se_boot", "ci_lo", "ci_hi", "model_y", "model_t"]}
+        rows[lag].update(n_rows=int(ok.sum()), n_dropped=int((~ok).sum()))
     return pd.DataFrame(rows).T.rename_axis("lag_hours")
 
 

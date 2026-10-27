@@ -192,6 +192,10 @@ follow-up PR from C together with the review fixes below.
 - **Oct 27, DML main ap lag (Holla)**: fixed at 0 h before any real-data run: it is
   the window the decay is measured over, and MSIS already uses the ap history, so the
   residual is the model's error over that window. 6, 12 and 24 h are reported
-  alongside. Synthetic check (no lag planted, seed 0): the estimate is largest at 0 h
-  and fades with lag (linear world -0.0184, -0.0176, -0.0128, -0.0042 m/day per nT).
-  The 6 h estimate stays close because ap 6 h apart is strongly correlated (r = 0.74).
+  alongside, all on the same rows (those with ap at the longest lag; the first day of
+  the series drops out). Synthetic check (no lag planted, seed 0): the estimate is
+  largest at 0 h and fades with lag (linear world -0.0187, -0.0179, -0.0132, -0.0044
+  m/day per nT; planted -0.0188). The 6 h estimate stays close because ap 6 h apart is
+  strongly correlated (r = 0.74). On real data, if a later lag beats 0 h, report it as
+  MSIS mistiming the storm response (it links to the slow-recovery finding), not as a
+  reason to switch the main lag (Sonu, #16 review).

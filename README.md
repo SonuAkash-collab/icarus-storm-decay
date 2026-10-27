@@ -19,6 +19,7 @@ Advanced Data Analytics course project, PES University.
 - `src/` reusable code (cleaning, features, analysis)
 - `notebooks/` exploration, numbered 01_, 02_, ...
 - `results/` final plots and tables
+- `docs/PLAN.md` task list, rules and decision log
 
 ## How we work
 Never push to `main`. Make a branch per task, open a pull request, get one review, merge.

@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src import schema  # noqa: E402
-from src.synthetic import AP_QUIET, make_synthetic, planted_event_profile  # noqa: E402
+from src.synthetic import AP_QUIET, HIGH_ALT_KM, make_synthetic, planted_event_profile  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -106,3 +106,48 @@ def test_operator_offset(fake):
     during = active[active["T_storm"] == 1]
     # Ducking: operators cancel duck_share of the storm effect while it lasts
     assert (during["true_manoeuvre"] / during["true_effect"]).median() == pytest.approx(-0.3)
+
+
+@pytest.fixture(scope="module")
+def with_high_alt():
+    return make_synthetic(n_objects=60, n_high_alt=15, return_hourly=True, seed=4)
+
+
+def test_high_alt_group(with_high_alt):
+    table, _, _ = with_high_alt
+    high = table[table["alt_km"] >= HIGH_ALT_KM[0]]
+    objects = high.groupby("norad_id").first()
+    assert len(objects) == 15
+    assert objects["alt_km"].between(*HIGH_ALT_KM).all()
+    assert (objects["ecc"] < schema.MAX_ECC).all() and (objects["is_active"] == 0).all()
+    assert (high["true_manoeuvre"] == 0).all() and (high["true_station_keeping"] == 0).all()
+    # Storm effect about zero up there, clearly negative lower down
+    storm = table[table["T_storm"] == 1]
+    assert abs(storm.loc[storm["alt_km"] >= 1000, "true_effect"].mean()) < 0.05
+    assert storm.loc[storm["alt_km"] < 1000, "true_effect"].mean() < -0.3
+    assert len(schema.main_sample(high)) > 0.9 * len(high)
+    assert schema.problems(table) == []
+
+
+def test_high_alt_leaves_other_objects_unchanged(with_high_alt):
+    table, storms, _ = with_high_alt
+    base, base_storms = make_synthetic(n_objects=60, seed=4)
+    pd.testing.assert_frame_equal(table[table["norad_id"] < 90060].reset_index(drop=True), base)
+    pd.testing.assert_frame_equal(storms, base_storms)
+
+
+def test_hourly_frame_like_load_spaceweather(with_high_alt):
+    table, _, hourly = with_high_alt
+    assert list(hourly.columns) == ["ap", "f107", "f107_81d"]
+    assert hourly.index.name == "time"
+    assert (hourly.index.to_series().diff().dropna() == pd.Timedelta(hours=1)).all()
+    assert hourly.notna().all().all()
+    assert "hourly" not in table.attrs                 # kept out of attrs (save_table writes them)
+    # Interval-mean ap of the table agrees with the hourly ap it was built from
+    row = table[table["T_storm"] == 1].iloc[0]
+    start = row["t_mid"] - pd.Timedelta(days=row["dt_days"] / 2)
+    end = row["t_mid"] + pd.Timedelta(days=row["dt_days"] / 2)
+    inside = hourly.loc[start.floor("h"):end.ceil("h") - pd.Timedelta(hours=1), "ap"]
+    assert row["T_ap_int"] / row["dt_days"] == pytest.approx(inside.mean(), rel=0.3)
+    day = row["t_mid"].floor("D")
+    assert hourly.loc[day, "f107"] == pytest.approx(row["f107"])

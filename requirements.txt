@@ -10,6 +10,7 @@ skyfield
 scikit-learn
 statsmodels
 econml
+xgboost
 doubleml
 spacetrack
 requests

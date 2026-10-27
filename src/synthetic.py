@@ -3,7 +3,9 @@
 The table has the exact columns of src/schema.py, plus the planted truth:
     true_tau          storm effect of this object (m/day per nT of ap above quiet), >= 0
     true_effect       storm part of Y_residual (m/day) = -true_tau * (mean ap - AP_QUIET)
-    true_manoeuvre    operator part of Y_residual (m/day), 0 for passive objects
+    true_manoeuvre    operator storm response in Y_residual (m/day), 0 for passive objects
+    true_station_keeping  routine operator boosts in Y_residual (m/day, constant per
+                      active satellite), 0 for passive objects
     true_artifact     TLE-fit part of Y_residual (m/day), 0 for clean intervals
 A method passes if it recovers these from the schema columns alone.
 
@@ -27,13 +29,16 @@ How the fake world works:
     (mostly negative, so it looks like extra storm decay); they get tle_ok = 0.
   schema.main_sample removes both; using every row biases the storm effect.
 - Residual (m/day) = object offset + UV model error (gamma * (f107 - 150))
-                     + season wave + true_effect + true_manoeuvre + noise.
+                     + season wave + true_effect + true_manoeuvre
+                     + true_station_keeping + noise.
   true_tau shrinks with altitude (thinner air higher up) and grows with drag
   sensitivity, so the effect differs by altitude as the vulnerability map expects.
 - Active satellites: during the storm (main_onset to recovery_end) operators cut
   duck_share of the storm effect; in the next RECOVERY_DAYS they win back
   recover_share of what was still lost. NO_DRAG_FIT of them have no
-  drag_sensitivity (manoeuvres spoil the quiet-time fit). Total offset ratio = duck_share +
+  drag_sensitivity (manoeuvres spoil the quiet-time fit), and every one does
+  routine station keeping (a constant boost, STATION_KEEPING m/day) that has
+  nothing to do with storms. Total offset ratio = duck_share +
   (1 - duck_share) * recover_share.
 """
 
@@ -56,6 +61,7 @@ APSIDAL_DAYS = 60.0                  # period of the perigee swing
 BAD_FIT_QUIET = 0.02                 # share of bad TLE fits on quiet days ...
 BAD_FIT_STORM = 0.10                 # ... and inside storm windows
 BAD_FIT_JUMP = (-40.0, 20.0)         # mean and sd of the fake jump (m/day)
+STATION_KEEPING = (0.5, 3.0)         # m/day of routine boosts per active satellite
 NO_DRAG_FIT = 0.2                    # share of active satellites without drag_sensitivity
 INCLINATIONS = [51.6, 53.0, 65.0, 72.0, 82.0, 87.0, 98.0]
 
@@ -178,6 +184,10 @@ def make_synthetic(n_objects=200, n_storms=20, storms=None, active_share=0.15,
         return np.interp((t - START).total_seconds().to_numpy() / 3600, grid, cum)
 
     objects = make_objects(n_objects, active_share, rng)
+    # Routine station keeping of active satellites (own generator, so adding it did
+    # not change the other random draws of a seed)
+    sk = np.random.default_rng([seed, 1]).uniform(*STATION_KEEPING, n_objects)
+    objects["station_keeping"] = np.where(objects["is_active"] == 1, sk, 0.0)
     rows = []
     for obj in objects.to_dict("records"):
         t0, t1 = intervals(storms, rng)
@@ -198,6 +208,7 @@ def make_synthetic(n_objects=200, n_storms=20, storms=None, active_share=0.15,
     df["true_effect"] = -df["true_tau"] * (df["T_ap_int"] / df["dt_days"] - AP_QUIET)
 
     # Operators: duck during the storm, recover in the following days
+    df["true_station_keeping"] = df["station_keeping"]
     df["true_manoeuvre"] = 0.0
     active = df["is_active"] == 1
     for s in storms.to_dict("records"):
@@ -223,6 +234,7 @@ def make_synthetic(n_objects=200, n_storms=20, storms=None, active_share=0.15,
     season = 1.0 * np.sin(2 * np.pi * df["day_of_year"] / 365.25)
     df["Y_residual"] = (df["offset"] + gamma * (df["f107"] - 150) + season
                         + df["true_effect"] + df["true_manoeuvre"] + df["true_artifact"]
+                        + df["true_station_keeping"]
                         + rng.normal(0, noise, len(df)) / np.sqrt(df["dt_days"]))
 
     # NRLMSISE-00 version: same truth, a slightly different model error (it runs hotter
@@ -239,10 +251,11 @@ def make_synthetic(n_objects=200, n_storms=20, storms=None, active_share=0.15,
     no_fit = objects.loc[(objects["is_active"] == 1) & (rng.random(n_objects) < NO_DRAG_FIT), "norad_id"]
     df.loc[df["norad_id"].isin(no_fit), "drag_sensitivity"] = np.nan
 
-    df = df.drop(columns=["t_start", "t_end", "offset", "phase"]).sort_values(["norad_id", "t_mid"])
+    df = df.drop(columns=["t_start", "t_end", "offset", "phase", "station_keeping"]).sort_values(["norad_id", "t_mid"])
     table = validate(df.reset_index(drop=True))
     table.attrs["truth"] = {"tau0": tau0, "scale_km": scale_km, "gamma": gamma,
                             "duck_share": duck_share, "recover_share": recover_share,
+                            "recovery_share": (1 - duck_share) * recover_share,
                             "offset_ratio": duck_share + (1 - duck_share) * recover_share,
                             "ap_quiet": AP_QUIET, "seed": seed}
     return table, storms

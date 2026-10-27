@@ -10,8 +10,8 @@ The table has the exact columns of src/schema.py, plus the planted truth:
 A method passes if it recovers these from the schema columns alone.
 
 How the fake world works:
-- Sun UV: f107_81d follows a slow yearly wave, f107 adds the 27-day solar rotation
-  and day-to-day noise.
+- Sun UV: f107_81d follows a slow solar-cycle decline plus a ~150-day wave, f107
+  adds the 27-day solar rotation and day-to-day noise.
 - Storms: main_onset days are drawn with probability rising with F10.7 (and a little
   near the equinoxes), so storms come with high Sun UV: this is the confounding.
   Each storm has a class (moderate/strong/severe/extreme in the real 11/6/2/1 mix),
@@ -296,6 +296,8 @@ def make_synthetic(n_objects=200, n_storms=20, storms=None, active_share=0.15,
     predicted = -60 * np.exp(-(df["alt_km"] - 400) / 60) * (df["drag_sensitivity"] / 0.01) * df["f107"] / 150
     observed = predicted + df["Y_residual"]
     df["Y_log_ratio"] = np.log((observed / predicted).where(observed < 0))
+    # Predicted decay is ~0 at high altitude, so the ratio means nothing there
+    df.loc[df["alt_km"] >= HIGH_ALT_KM[0], "Y_log_ratio"] = np.nan
 
     # Some active satellites have no usable quiet-time fit (manoeuvres), as in real data
     no_fit = objects.loc[(objects["is_active"] == 1) & (rng.random(n_objects) < NO_DRAG_FIT), "norad_id"]

@@ -125,7 +125,9 @@ def test_high_alt_group(with_high_alt):
     storm = table[table["T_storm"] == 1]
     assert abs(storm.loc[storm["alt_km"] >= 1000, "true_effect"].mean()) < 0.05
     assert storm.loc[storm["alt_km"] < 1000, "true_effect"].mean() < -0.3
-    assert len(schema.main_sample(high)) > 0.9 * len(high)
+    assert len(schema.main_sample(table)) > 0 and (schema.main_sample(table)["alt_km"] < 1000).all()
+    assert len(schema.high_alt_sample(table)) > 0.9 * len(high)
+    assert high["Y_log_ratio"].isna().all()
     assert schema.problems(table) == []
 
 

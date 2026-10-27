@@ -40,6 +40,14 @@ How the fake world works:
   routine station keeping (a constant boost, STATION_KEEPING m/day) that has
   nothing to do with storms. Total offset ratio = duck_share +
   (1 - duck_share) * recover_share.
+- High-altitude control (n_high_alt > 0): extra passive, near-circular objects at
+  1,000-1,500 km. The air there is so thin that their planted storm effect is about
+  zero, but they share the Sun UV error, season wave and TLE bad fits, so a method
+  should find no storm effect for them. They come from their own random generator,
+  so adding them leaves the rest of the table unchanged.
+- return_hourly=True also returns the hourly space weather (ap, f107, f107_81d,
+  indexed by time) in the format of omni_io.load_spaceweather(), for methods that
+  need ap lags.
 """
 
 import numpy as np
@@ -63,6 +71,7 @@ BAD_FIT_STORM = 0.10                 # ... and inside storm windows
 BAD_FIT_JUMP = (-40.0, 20.0)         # mean and sd of the fake jump (m/day)
 STATION_KEEPING = (0.5, 3.0)         # m/day of routine boosts per active satellite
 NO_DRAG_FIT = 0.2                    # share of active satellites without drag_sensitivity
+HIGH_ALT_KM = (1000.0, 1500.0)       # altitude range of the high-altitude control group
 INCLINATIONS = [51.6, 53.0, 65.0, 72.0, 82.0, 87.0, 98.0]
 
 
@@ -136,6 +145,31 @@ def make_objects(n_objects, active_share, rng):
     })
 
 
+def make_high_alt_objects(n_objects, first_id, rng):
+    """Passive, near-circular (ecc < 0.01) objects at HIGH_ALT_KM, same columns as make_objects."""
+    inc = rng.choice(INCLINATIONS, n_objects) + rng.normal(0, 0.3, n_objects)
+    return pd.DataFrame({
+        "norad_id": first_id + np.arange(n_objects),
+        "alt_km": rng.uniform(*HIGH_ALT_KM, n_objects),
+        "inc_deg": np.clip(inc, 0, 180),
+        "local_solar_time": rng.uniform(0, 24, n_objects),
+        "drag_sensitivity": rng.lognormal(np.log(0.01), 0.5, n_objects),
+        "is_active": np.zeros(n_objects, dtype="int64"),
+        "ecc": np.clip(rng.lognormal(np.log(0.002), 0.5, n_objects), 0, 0.009),
+        "phase": rng.uniform(0, 2 * np.pi, n_objects),
+        "offset": rng.normal(0, 2.0, n_objects),
+    })
+
+
+def hourly_spaceweather(flux, ap):
+    """Hourly ap, f107, f107_81d indexed by time, like omni_io.load_spaceweather()."""
+    daily = flux.reindex(ap.index.floor("D"))
+    out = pd.DataFrame({"ap": ap.to_numpy(), "f107": daily["f107"].to_numpy(),
+                        "f107_81d": daily["f107_81d"].to_numpy()}, index=ap.index)
+    out.index.name = "time"
+    return out
+
+
 def storm_effect_per_ap(alt_km, drag_sensitivity, tau0, scale_km):
     """Planted effect (m/day per nT): tau0 at 400 km and B = 0.01 m^2/kg, falling with altitude."""
     return tau0 * np.exp(-(np.asarray(alt_km) - 400) / scale_km) * (np.asarray(drag_sensitivity) / 0.01)
@@ -159,14 +193,16 @@ def intervals(storms, rng, start=START, end=END):
 
 def make_synthetic(n_objects=200, n_storms=20, storms=None, active_share=0.15,
                    tau0=0.05, scale_km=150.0, gamma=-0.12, noise=3.0,
-                   duck_share=0.3, recover_share=0.5, seed=0):
+                   duck_share=0.3, recover_share=0.5, n_high_alt=0, return_hourly=False, seed=0):
     """Fake analysis table in the schema format, and the storm catalog used.
 
     tau0: storm effect at 400 km (m/day per nT of ap); scale_km: how fast it fades
     with altitude; gamma: UV model error (m/day per sfu; the confounding strength);
     noise: residual noise (m/day for a 1-day interval); duck_share, recover_share:
-    operator offset of active satellites. Returns (table, storms); the planted
-    settings are in table.attrs["truth"].
+    operator offset of active satellites; n_high_alt: number of extra passive objects
+    at 1,000-1,500 km (the high-altitude control, 10-20 is a realistic count).
+    Returns (table, storms), or (table, storms, hourly) with return_hourly=True; the
+    planted settings are in table.attrs["truth"].
     """
     rng = np.random.default_rng(seed)
     days = pd.date_range(START, END, freq="D")
@@ -188,11 +224,25 @@ def make_synthetic(n_objects=200, n_storms=20, storms=None, active_share=0.15,
     # not change the other random draws of a seed)
     sk = np.random.default_rng([seed, 1]).uniform(*STATION_KEEPING, n_objects)
     objects["station_keeping"] = np.where(objects["is_active"] == 1, sk, 0.0)
+    # High-altitude control group: own generator for every draw, so the rest is unchanged
+    hrng = np.random.default_rng([seed, 2])
+    high = make_high_alt_objects(n_high_alt, 90000 + n_objects, hrng).assign(station_keeping=0.0)
     rows = []
     for obj in objects.to_dict("records"):
         t0, t1 = intervals(storms, rng)
         rows.append(pd.DataFrame({"norad_id": obj["norad_id"], "t_start": t0, "t_end": t1}))
-    df = pd.concat(rows, ignore_index=True).merge(objects, on="norad_id")
+    for obj in high.to_dict("records"):
+        t0, t1 = intervals(storms, hrng)
+        rows.append(pd.DataFrame({"norad_id": obj["norad_id"], "t_start": t0, "t_end": t1}))
+    df = pd.concat(rows, ignore_index=True).merge(pd.concat([objects, high], ignore_index=True),
+                                                  on="norad_id")
+    # Row-level random draws: main objects from rng (in the original order), the
+    # high-altitude rows (last in df) from hrng
+    n_main = int((df["norad_id"] < 90000 + n_objects).sum())
+
+    def draw(method, *args):
+        main = getattr(rng, method)(*args, n_main)
+        return np.concatenate([main, getattr(hrng, method)(*args, len(df) - n_main)])
 
     df["dt_days"] = (df["t_end"] - df["t_start"]) / pd.Timedelta(days=1)
     df["t_mid"] = df["t_start"] + (df["t_end"] - df["t_start"]) / 2
@@ -226,8 +276,8 @@ def make_synthetic(n_objects=200, n_storms=20, storms=None, active_share=0.15,
     days_in = (df["t_mid"] - START) / pd.Timedelta(days=1)
     swing = np.where(df["ecc"] >= 0.01,
                      ECC_SWING * df["ecc"] * np.sin(2 * np.pi * days_in / APSIDAL_DAYS + df["phase"]), 0)
-    bad = rng.random(len(df)) < np.where(df["T_storm"] == 1, BAD_FIT_STORM, BAD_FIT_QUIET)
-    jump = np.where(bad, rng.normal(*BAD_FIT_JUMP, len(df)), 0)
+    bad = draw("random") < np.where(df["T_storm"] == 1, BAD_FIT_STORM, BAD_FIT_QUIET)
+    jump = np.where(bad, draw("normal", *BAD_FIT_JUMP), 0)
     df["tle_ok"] = (~bad).astype("int64")
     df["true_artifact"] = swing + jump
 
@@ -235,12 +285,12 @@ def make_synthetic(n_objects=200, n_storms=20, storms=None, active_share=0.15,
     df["Y_residual"] = (df["offset"] + gamma * (df["f107"] - 150) + season
                         + df["true_effect"] + df["true_manoeuvre"] + df["true_artifact"]
                         + df["true_station_keeping"]
-                        + rng.normal(0, noise, len(df)) / np.sqrt(df["dt_days"]))
+                        + draw("normal", 0, noise) / np.sqrt(df["dt_days"]))
 
     # NRLMSISE-00 version: same truth, a slightly different model error (it runs hotter
     # at high Sun UV) and its own fit noise
     df["Y_residual_nrl"] = (df["Y_residual"] + 0.02 * (df["f107"] - 150)
-                            + rng.normal(0, 0.5 * noise, len(df)) / np.sqrt(df["dt_days"]))
+                            + draw("normal", 0, 0.5 * noise) / np.sqrt(df["dt_days"]))
 
     # Physics-model prediction (m/day, negative) only to build the log ratio
     predicted = -60 * np.exp(-(df["alt_km"] - 400) / 60) * (df["drag_sensitivity"] / 0.01) * df["f107"] / 150
@@ -257,7 +307,9 @@ def make_synthetic(n_objects=200, n_storms=20, storms=None, active_share=0.15,
                             "duck_share": duck_share, "recover_share": recover_share,
                             "recovery_share": (1 - duck_share) * recover_share,
                             "offset_ratio": duck_share + (1 - duck_share) * recover_share,
-                            "ap_quiet": AP_QUIET, "seed": seed}
+                            "ap_quiet": AP_QUIET, "n_high_alt": n_high_alt, "seed": seed}
+    if return_hourly:
+        return table, storms, hourly_spaceweather(flux, ap)
     return table, storms
 
 

@@ -36,6 +36,7 @@ synthetic data.
 | #18 | A2-A4: passive cohort, TLE cleaning, decay intervals (`orbit_intervals_a2_a4.parquet`) |
 | #19 | Residual validation: outlier filter, `Y_total`, TLE-blur check, notebook 04 |
 | B6 | Physics simulator (`src/simulate.py`) with a known storm boost (PR pending) |
+| B4-B5 | Cohort physics and the real analysis table (`src/build_table.py`, notebook 05; PR pending) |
 
 ## A: Piyush (orbit data)
 
@@ -70,7 +71,9 @@ synthetic data.
   - [x] Report both, with and without the May 2024 and Oct 2024 storms.
   - [x] Save (a) as its own column `Y_total` (m/day): optional column in `schema.py`
     (`OPTIONAL_COLUMNS`), built by `physics.quiet_ap_drivers` + `physics.add_total_effect`.
-  - [ ] Rerun notebook 04 on the full cohort (with B4-B5 at scale).
+  - [ ] Rerun notebook 04 on the full cohort (with B4-B5 at scale). Notebook 05 covers the
+        holdout check, May/Oct residuals and the event-day profile; the smoothing / lag
+        checks of notebook 04 are still to rerun on the cohort.
   - [ ] Blur-free outcome for the extreme storms: total altitude lost from a calm day before
         to a calm day after (decision rule below).
 - [ ] **B3 object catalog** (`src/objects.py`, branch `B3-objects`): CelesTrak SATCAT
@@ -103,11 +106,26 @@ synthetic data.
         truth (median error < 1%); boost 0 -> residual ~0; held-out quiet residual ~0;
         planted boost (days 0..2) inside the event-study 95% interval; noise larger
         in storms; negative boost; smoothing delays the storm; schema columns.
-- [ ] **B4-B5 at scale** (after A2 is merged): re-run `physics.py` for the whole
-      cohort. Where the quiet-time fit of drag sensitivity is unusable (high-altitude
-      group: predicted decay ~0, so observed / driver blows up), fall back to
-      `drag_sensitivity_catalog` from B3, mark it in an extra column
-      `drag_source` = "fit" / "catalog", and leave `Y_log_ratio` NaN.
+- [x] **B4-B5 at scale** (branch `B4-B5-cohort-physics`, `src/build_table.py`,
+      `notebooks/05_cohort_physics.ipynb`): `python -m src.build_table` rebuilds
+      `data/processed/analysis_table.parquet` (199,580 rows, 265 objects, validated).
+  - [x] Drivers for NRLMSISE-00, MSIS 2.1 and MSIS 2.1 with quiet ap, cached in chunks of
+        10 objects (`data/processed/physics_chunks/`, resumes after a crash). Benchmark:
+        3,870 intervals in ~50 s; the cohort took ~37 min.
+  - [x] Climb intervals kept (2.2% of main intervals, `climb_flag` column); Hampel filter on
+        the MSIS 2.1 residual sets `tle_ok = 0` (5.5%, incl. 64.5% of the climbs).
+        Check without climbs: B changes by 0.4% (median), short-run effect -14.6 vs -14.1 m/day.
+  - [x] Drag sensitivity: ratio of sums on clean quiet fit intervals, 500-draw block
+        bootstrap by week (`drag_se`). Positive and stable for all 250 passive objects
+        (SE / B median 3%, max 8%). Unstable rule below.
+  - [x] High-altitude group: `Y_log_ratio` NaN. Their quiet fit is tight on real data
+        (SE / B ~4%, held-out residual 0.03 m/day, t = 0.4), so they keep it
+        (`drag_source = "fit"`); an unstable one falls back to the main-cohort median B
+        (`"cohort_median"`) until the B3 catalog exists.
+  - [x] Gate passed: held-out quiet residual -0.13 m/day (weekly-block SE 1.07) pooled over
+        50,674 intervals vs mean decay -50.6 m/day; per-object t SD 0.82, 6 of 250 with |t| > 2.
+  - [x] Smoke test of `src.causal_run` (PRELIMINARY, see decision log). It now skips the
+        offset ratio when the table has no active satellites (needs B3).
 
 ## C: Siddhant Anil (event study and offset ratio, `causal-event-offset`)
 
@@ -196,8 +214,26 @@ synthetic data.
 - Storm windows overlap: drop the contaminated windows, or use only clean controls in
   the stacked event study.
 - Held-out quiet residual isn't ~0: stop and fix drag sensitivity first.
+- Drag sensitivity is unstable (fixed before the cohort run, `build_table.drag_bootstrap`)
+  if the object has fewer than 30 quiet fit intervals, its weekly block-bootstrap SE is
+  more than 25% of B, or its bootstrap 95% interval reaches zero. Unstable objects are
+  flagged (`drag_unstable = 1`), not dropped; a high-altitude object that is unstable
+  gets the main-cohort median B.
 
 ## Decision log
+
+- **Oct 30, B4-B5 cohort physics (Sonu)**: climb intervals are kept (dropping only upward
+  noise would make decay look too fast); Piyush's `tle_ok` failed them, so the table's
+  `tle_ok` is the TLE endpoint check plus the Hampel filter, and `climb_flag` is kept for
+  the with/without check. High-altitude objects keep their quiet fit (tight on real data,
+  unlike the simulator) rather than a placeholder B: a cohort-median B is ~6x too large for
+  most of them and would fake a storm effect in the negative control. Smoke-test numbers
+  (PRELIMINARY, 12 clean storms): total storm effect `Y_total` days 0-2 -14.1 m/day
+  (95% CI -19.8 to -8.4, placebo p < 0.002, pre-trend p = 0.41), -13.8 without May/Oct
+  (`key_storm_ids` also drops the moderate May 2 storm), -10.1 with the (-3, 10) rule;
+  model error `Y_residual` +0.2 (CI -3.2 to 3.2, placebo p = 0.88); high-altitude control
+  `Y_total` -0.7 (CI -1.4 to 0.1). May/Oct 2024: MSIS 2.1 over-predicts days 0..+3 for
+  almost every object (median +12 / +15 m/day), consistent with notebook 04.
 
 - **Oct 30, A2-A4 orbit pipeline (Piyush)**: selected 250 passive 400-800 km objects
   with coverage on at least 8 of 9 Space-Track snapshots, plus 15 separate 1,000-1,500

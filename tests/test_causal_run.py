@@ -53,6 +53,14 @@ def test_run_with_both_estimands(fake, tmp_path):
     assert "missing" not in (tmp_path / "summary.md").read_text()
 
 
+def test_passive_only_table_skips_offset_ratio(fake, tmp_path):
+    table, storms = fake
+    out = cr.run(table[table["is_active"] == 0], storms, out_dir=tmp_path, **QUICK)
+    assert out["offset"] is None
+    assert "Not run: the table has no active satellites" in (tmp_path / "summary.md").read_text()
+    assert not (tmp_path / "offset_ratio.csv").exists()
+
+
 def test_no_outcome_raises(fake, tmp_path):
     table, storms = fake
     with pytest.raises(ValueError, match="none of the outcomes"):

@@ -147,34 +147,35 @@ def key_storm_ids(storms, months=KEY_MONTHS):
     return storms.loc[pick, "storm_id"].tolist()
 
 
-def with_without(table, storms, drop=None, n_boot=999, seed=0):
+def with_without(table, storms, drop=None, outcome="Y_residual", n_boot=999, seed=0):
     """Short-run effect with all storms and without the May / Oct 2024 storms."""
     drop = key_storm_ids(storms) if drop is None else drop
     rows = {}
     for name, excl in [("all storms", []), ("without " + ",".join(map(str, drop)), drop)]:
-        res, report = es.event_study(table, storms, exclude_storms=excl, n_boot=n_boot, seed=seed)
+        res, report = es.event_study(table, storms, outcome, exclude_storms=excl, n_boot=n_boot, seed=seed)
         rows[name] = pd.concat([short_run_effect(res), pd.Series({"storms_used": report["used"].sum()})])
     return pd.DataFrame(rows).T
 
 
-def contam_sensitivity(table, storms, rules=("active", SENSITIVITY_CONTAM), n_boot=999, seed=0):
+def contam_sensitivity(table, storms, rules=("active", SENSITIVITY_CONTAM), outcome="Y_residual",
+                       n_boot=999, seed=0):
     """Short-run effect and storms used under each contamination rule. (-3, 10) also drops
     rows in the 10 days after another storm's onset, where slow post-storm recovery
     could leak into a neighbour's pre-period."""
     rows = {}
     for rule in rules:
-        res, report = es.event_study(table, storms, contam=rule, n_boot=n_boot, seed=seed)
+        res, report = es.event_study(table, storms, outcome, contam=rule, n_boot=n_boot, seed=seed)
         rows[str(rule)] = pd.concat([short_run_effect(res), pd.Series({"storms_used": report["used"].sum()})])
     return pd.DataFrame(rows).T
 
 
-def run_all(table, storms, n_placebo=500, n_boot=999, seed=0):
-    """Every check on one table; returns a dict of results for the notebook / paper."""
-    res, report = es.event_study(table, storms, n_boot=n_boot, seed=seed)
+def run_all(table, storms, outcome="Y_residual", n_placebo=500, n_boot=999, seed=0):
+    """Every check on one table and outcome; returns a dict of results for the notebook / paper."""
+    res, report = es.event_study(table, storms, outcome, n_boot=n_boot, seed=seed)
     sr = short_run_effect(res)
-    placebo = placebo_dates(table, storms, n_draws=n_placebo, seed=seed)
+    placebo = placebo_dates(table, storms, n_draws=n_placebo, seed=seed, outcome=outcome)
     return {"result": res, "report": report, "summary": es.summarise(report),
             "short_run": sr, "pretrend": pretrend_test(res, placebo),
             "placebo": placebo, "placebo_summary": placebo_summary(placebo, sr["est"]),
-            "with_without": with_without(table, storms, n_boot=n_boot, seed=seed),
-            "contam_sensitivity": contam_sensitivity(table, storms, n_boot=n_boot, seed=seed)}
+            "with_without": with_without(table, storms, outcome=outcome, n_boot=n_boot, seed=seed),
+            "contam_sensitivity": contam_sensitivity(table, storms, outcome=outcome, n_boot=n_boot, seed=seed)}

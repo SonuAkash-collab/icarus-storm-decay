@@ -29,11 +29,8 @@ synthetic data.
 | #5 | Synthetic generator, causal graph, schema follow-ups |
 | #6 | Stacked event study with clean controls (synthetic data) |
 | #10 | This planning file |
-
-**Not on `main` yet:** #7 (event-study checks) and #8 (offset ratio) were merged into
-the `causal-event-study` branch, and #9 (high-altitude group, hourly ap) into
-`causal-offset-ratio`, after #6 had already gone to `main`. They come to `main` in one
-follow-up PR from C together with the review fixes below.
+| #12 | Event-study checks (#7), offset ratio (#8) and high-altitude group / hourly ap (#9) brought to `main`, with the #6-#9 review fixes and the curved UV option |
+| #13 | Curved UV error fades above 800 km |
 
 ## A: Piyush (orbit data)
 
@@ -79,16 +76,16 @@ follow-up PR from C together with the review fixes below.
 
 ## C: Siddhant Anil (event study and offset ratio, `causal-event-offset`)
 
-- [x] **Synthetic additions** (#9, not on `main` yet): `n_high_alt` (1,000-1,500 km
+- [x] **Synthetic additions** (#9, on `main` via #12): `n_high_alt` (1,000-1,500 km
       group) and `return_hourly` (hourly frame in the format of
       `omni_io.load_spaceweather()`, not in `table.attrs`).
 - [x] **Event study** (#6, on `main`): stacked, clean controls, CR1 + wild cluster
       bootstrap by storm.
-- [x] **Event-study checks** (#7, not on `main` yet): planted recovery, placebo-based
+- [x] **Event-study checks** (#7, on `main` via #12): planted recovery, placebo-based
       pre-trend test, 500 placebo dates, with/without May/Oct 2024.
-- [x] **Offset ratio** (#8, not on `main` yet): matched twins, station keeping removed
+- [x] **Offset ratio** (#8, on `main` via #12): matched twins, station keeping removed
       via days -10..-3, ducking and recovery windows, debris placebo.
-- [ ] **Follow-up PR to `main`** bringing #7-#9 in, with these fixes:
+- [x] **Follow-up PR to `main`** (#12) bringing #7-#9 in, with these fixes:
   - `event_study(exclude_storms=...)` must still treat the excluded storms as
     contaminating (pass them to `build_stacks(..., others=...)`). Now 2,713 rows
     from inside the excluded storms become clean controls (synthetic, seed 0).
@@ -99,13 +96,19 @@ follow-up PR from C together with the review fixes below.
     total storm effect (`Y_total` from B), not `Y_residual`: `Y_residual` is model
     error, and MSIS already follows most of the storm.
   - Docstring nit: `f107_81d` is no longer a yearly wave.
-- [ ] **Sensitivity runs**: event study with `contam=(-3, 10)` as well as the default
+- [x] **Sensitivity runs** (#12): event study with `contam=(-3, 10)` as well as the default
       `"active"` (our headline is slow recovery, which can leak into the next storm's
       pre-period); offset ratio with a 5-day recovery window as well as 10 days.
-- [ ] **Curved confounder option** in `make_synthetic`: UV model error that grows with
-      altitude and saturates at high F10.7. Default stays linear so existing tests
-      don't move.
-- [ ] **Paper**: intro, data/physics setup, DAG, event study, offset ratio.
+- [x] **Curved confounder option** in `make_synthetic` (#12, #13): UV model error that
+      grows with altitude up to 800 km, fades above it, and saturates at high F10.7.
+      Default stays linear so existing tests don't move.
+- [x] **Real-run script** (`src/causal_run.py`): every C result on one table, for both
+      estimands (`Y_total`, `Y_residual`), with/without May/Oct 2024, the `(-3, 10)` and
+      5-day sensitivity runs, the high-altitude negative control and the offset ratio
+      on `Y_total`. Writes CSVs and `summary.md` to `results/causal`. Tested on
+      synthetic data; on Nov 18 run `python -m src.causal_run`.
+- [ ] **Paper**: intro, data/physics setup, DAG, event study, offset ratio. Draft
+      written on synthetic results; real numbers go in from `results/causal/summary.md`.
 
 ## D: Sidhant Holla (double ML and vulnerability map, `causal-dml-forest`)
 

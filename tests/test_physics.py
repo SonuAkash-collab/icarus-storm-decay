@@ -120,3 +120,123 @@ def test_holdout_residual_is_near_zero(rocket_bodies, model):
     for _, r in res.iterrows():
         # Within 2 weekly-block standard errors (residuals are autocorrelated)
         assert abs(r["mean_resid"]) < 2 * r["se_block"], r.to_dict()
+
+
+# --- residual validation: Hampel outlier filter --------------------------------
+
+def noisy_series(n=300, seed=0):
+    """Residual-like series: smooth wave + small noise, irregular times ~0.4 day apart."""
+    rng = np.random.default_rng(seed)
+    times = pd.Timestamp("2024-06-01") + pd.to_timedelta(np.cumsum(rng.uniform(0.2, 0.6, n)), unit="D")
+    values = 0.005 * np.sin(np.arange(n) / 20) + rng.normal(0, 0.002, n)
+    return times, values
+
+
+def test_hampel_flags_planted_spikes():
+    times, values = noisy_series()
+    spikes = [40, 120, 250]
+    values[spikes] += np.array([0.05, -0.08, 0.06])       # 25-40 noise SDs
+    flags = physics.hampel_flags(values, times)
+    assert flags[spikes].all()
+    assert flags.mean() < 0.03                             # few false alarms on normal noise
+
+
+def test_hampel_keeps_a_step_and_handles_unsorted_input():
+    times, values = noisy_series()
+    values[150:] -= 0.03                                   # level shift (a real change, not an outlier)
+    flags = physics.hampel_flags(values, times)
+    assert flags[145:155].sum() <= 2
+    order = np.random.default_rng(1).permutation(len(values))
+    shuffled = physics.hampel_flags(values[order], times[order])
+    assert (shuffled == flags[order]).all()
+
+
+def test_remove_outliers_reports_share_and_refits():
+    times, values = noisy_series()
+    rates = pd.DataFrame({"norad_id": 1, "t_mid": times, "t_start": times, "t_end": times,
+                          "dt_days": 0.4, "role": np.where(np.arange(len(times)) % 2, "holdout", "fit")})
+    for model in physics.MODELS:
+        rates[f"driver_{model}"] = -10.0
+    rates["da_dt_km_per_day"] = -0.1 + values
+    rates.loc[[30, 31 + 100], "da_dt_km_per_day"] += 0.2   # one bad pair in fit, one in holdout
+    rates = physics.add_predictions(physics.add_predictions(rates, "nrlmsise00"), "msis21")
+    clean, report = physics.remove_outliers(rates)
+    assert len(clean) == len(rates) - report["removed"].sum()
+    assert report["removed"].sum() >= 2
+    assert np.isclose(report["share"].mul(report["intervals"]).sum(), report["removed"].sum())
+    assert clean["resid_msis21"].abs().max() < 0.05
+
+
+# --- residual validation: Y_total and the storm summaries ----------------------
+
+def test_quiet_ap_is_median_of_days_minus10_to_minus3():
+    hours = pd.date_range("2024-05-01", "2024-05-31", freq="h")
+    sw = pd.DataFrame({"ap": 5.0}, index=hours)
+    onset = pd.Timestamp("2024-05-20")
+    sw.loc[onset - pd.Timedelta(days=2):, "ap"] = 300.0            # storm starts after day -3
+    sw.loc[onset - pd.Timedelta(days=9):onset - pd.Timedelta(days=8), "ap"] = 80.0   # short burst
+    storms = pd.DataFrame({"storm_id": [7], "main_onset": [onset]})
+    assert physics.quiet_ap(sw, storms).loc[7] == 5.0
+
+
+def test_total_effect_uses_quiet_driver():
+    rates = pd.DataFrame({"da_dt_km_per_day": [-0.20, -0.10], "B_msis21": [0.01, 0.01],
+                          "driver_quiet_msis21": [-10.0, -10.0]})
+    out = physics.add_total_effect(rates)
+    assert np.allclose(out["pred_quiet_msis21"], -0.1)
+    assert np.allclose(out["total_msis21"], [-0.1, 0.0])
+
+
+def test_y_total_is_optional_in_schema():
+    from src import schema
+    from src.synthetic import make_synthetic
+
+    table, _ = make_synthetic(n_objects=10, seed=0)
+    assert "Y_total" not in table
+    schema.validate(table)                                          # still valid without it
+    with_total = schema.validate(table.assign(Y_total=table["Y_residual"].astype("float32")))
+    assert with_total["Y_total"].dtype == "float64"
+    assert "Y_total" in schema.OUTCOMES
+    desc = schema.describe().set_index("column")
+    assert desc.loc["Y_total", "unit"] == "m/day" and not desc.loc["Y_total", "required"]
+
+
+def test_storm_baseline_residual_recovers_planted_shift():
+    onset = pd.Timestamp("2024-06-15")
+    t = onset + pd.to_timedelta(np.arange(-12, 6, 0.5) + 0.25, unit="D")
+    resid = np.where(t >= onset, 0.02, 0.005)                       # +0.015 km/day after onset
+    rates = pd.DataFrame({"norad_id": 1, "t_mid": t, "t_start": t - pd.Timedelta(hours=6),
+                          "t_end": t + pd.Timedelta(hours=6), "dt_days": 0.5, "y": resid})
+    storms = pd.DataFrame({"storm_id": [1], "main_onset": [onset], "class": ["strong"], "min_dst": [-150.0]})
+    out = physics.storm_baseline_residual(rates, storms, "y")
+    assert np.isclose(out["change"].iloc[0], 0.015)
+    assert physics.storm_mean(out)["storms"] == 1
+
+
+def test_smoothing_keeps_a_constant_driver():
+    t = pd.Timestamp("2024-06-01") + pd.to_timedelta(np.arange(20) * 0.4, unit="D")
+    rates = pd.DataFrame({"norad_id": 1, "t_mid": t, "dt_days": 0.4, "driver_msis21": -3.0})
+    assert np.allclose(physics.smooth_driver(rates, "msis21", 2)["driver_msis21_s2"], -3.0)
+    shifted = physics.shift_driver(rates.assign(driver_msis21=np.arange(20.0)), "msis21", 0.4 * 24)
+    assert np.isnan(shifted["driver_msis21_lag9.6"].iloc[0])
+    assert np.allclose(shifted["driver_msis21_lag9.6"].iloc[1:], np.arange(19.0))
+
+
+def test_y_total_more_negative_than_residual_in_may_storm(rocket_bodies, tmp_path):
+    """Real data: in the May 2024 storm (ap far above quiet) the quiet-ap prediction is
+    smaller, so Y_total shows more extra decay than Y_residual."""
+    records = download_tle_history(ROCKET_BODIES, "2024-04-01", "2025-04-30", out_name=TLE_FILE)
+    tles = drop_duplicate_epochs(tles_to_frame(records))
+    rates = decay_rates(tles)
+    sw = physics.load_msis_weather()
+    storms = storm_catalog(sw.loc[physics.PERIOD_START:, "dst"])
+    q = physics.quiet_ap_drivers(tles, rates, sw, storms)
+    out = physics.add_total_effect(rocket_bodies.merge(
+        q[["norad_id", "t_start", "storm_id", "quiet_ap", "driver_quiet_msis21"]], on=["norad_id", "t_start"]))
+    may = storms.loc[storms["min_dst"].idxmin()]
+    post = out[(out["t_mid"] >= may["main_onset"]) & (out["t_mid"] <= may["main_onset"] + pd.Timedelta(days=3))]
+    assert (post["storm_id"] == may["storm_id"]).all()
+    assert post["total_msis21"].mean() < post["resid_msis21"].mean() - 0.02    # > 20 m/day more
+    # Outside every event window the quiet prediction is the actual one
+    free = out[out["storm_id"].isna()]
+    assert np.allclose(free["total_msis21"], free["resid_msis21"])

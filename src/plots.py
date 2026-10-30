@@ -149,3 +149,76 @@ def plot_observed_vs_predicted(rates, storms, title, start=None, end=None, out_p
     if out_path is not None:
         fig.savefig(out_path, dpi=150)
     return fig
+
+
+def plot_outliers(rates, flags, model, title, out_path=None):
+    """Residual of one object over the year, Hampel outliers marked.
+
+    rates: physics output for ONE object; flags: boolean array (physics.flag_outliers).
+    """
+    r = rates[f"resid_{model}"] * 1000
+    fig, ax = plt.subplots(figsize=(12, 3.5))
+    ax.plot(rates["t_mid"], r, color=DATA_COLOR, lw=0.5, marker="o", ms=1.5, label="kept")
+    ax.plot(rates["t_mid"][flags], r[flags], "x", color=EVENT_COLOR, ms=6, label="Hampel outlier")
+    ax.axhline(0, color=WEATHER_COLOR, lw=0.8)
+    ax.set_ylabel("observed - predicted (m/day)")
+    ax.set_title(title, loc="left", fontsize=12)
+    ax.legend(frameon=False, fontsize=9, loc="lower left")
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b\n%Y"))
+    _clean_axes(ax)
+    fig.tight_layout()
+    if out_path is not None:
+        fig.savefig(out_path, dpi=150)
+    return fig
+
+
+def plot_smoothing_zoom(rates, variants, t0, title, days=(-10, 10), out_path=None):
+    """Observed decay and the prediction smoothed by different amounts around one storm.
+
+    rates: physics output for ONE object with pred_<name> for every name in `variants`
+    ({column suffix: label}); t0: main_onset. The days 0..+3 window is shaded.
+    """
+    import pandas as pd
+
+    start, end = t0 + pd.Timedelta(days=days[0]), t0 + pd.Timedelta(days=days[1])
+    r = rates[(rates["t_mid"] >= start) & (rates["t_mid"] <= end)]
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.axvspan(t0, t0 + pd.Timedelta(days=3), color=EVENT_COLOR, alpha=0.10, lw=0)
+    ax.plot(r["t_mid"], r["da_dt_km_per_day"] * 1000, color=DATA_COLOR, lw=0.6, marker="o", ms=2,
+            label="observed (TLE)")
+    shades = plt.cm.Greys([0.95, 0.75, 0.55, 0.4, 0.3])
+    for (name, label), color in zip(variants.items(), shades):
+        ax.plot(r["t_mid"], r[f"pred_{name}"] * 1000, color=color, lw=1.3, label=label)
+    ax.set_ylabel("da/dt (m/day)")
+    ax.set_title(title, loc="left", fontsize=12)
+    ax.legend(frameon=False, fontsize=9, loc="lower left", ncol=3)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+    _clean_axes(ax)
+    fig.tight_layout()
+    if out_path is not None:
+        fig.savefig(out_path, dpi=150)
+    return fig
+
+
+def plot_storm_changes(per_storm, title, out_path=None):
+    """Baseline-relative residual per storm (dots per object, bar = mean), storms
+    ordered by min Dst. per_storm: physics.storm_baseline_residual with change in m/day."""
+    order = per_storm.groupby("storm_id")["min_dst"].first().sort_values().index
+    pos = {sid: i for i, sid in enumerate(order)}
+    means = per_storm.groupby("storm_id")["change"].mean().reindex(order)
+    fig, ax = plt.subplots(figsize=(12, 4))
+    ax.bar(range(len(order)), means, color=DATA_COLOR, alpha=0.35, width=0.7, label="mean of objects")
+    for marker, (nid, g) in zip("os^v", per_storm.groupby("norad_id")):
+        ax.plot(g["storm_id"].map(pos), g["change"], marker, color=DATA_COLOR, ms=4, label=f"NORAD {nid}")
+    ax.axhline(0, color=WEATHER_COLOR, lw=0.8)
+    dst = per_storm.groupby("storm_id")["min_dst"].first().reindex(order)
+    ax.set_xticks(range(len(order)), [f"{s}\n{d:.0f}" for s, d in zip(order, dst)], fontsize=8)
+    ax.set_xlabel("storm id / min Dst (nT)")
+    ax.set_ylabel("days 0..+3 minus days -10..-3\n(m/day, > 0 = over-prediction)")
+    ax.set_title(title, loc="left", fontsize=12)
+    ax.legend(frameon=False, fontsize=9)
+    _clean_axes(ax)
+    fig.tight_layout()
+    if out_path is not None:
+        fig.savefig(out_path, dpi=150)
+    return fig

@@ -31,13 +31,20 @@ synthetic data.
 | #10 | This planning file |
 | #12 | Event-study checks (#7), offset ratio (#8) and high-altitude group / hourly ap (#9) brought to `main`, with the #6-#9 review fixes and the curved UV option |
 | #13 | Curved UV error fades above 800 km |
-| B6 | Physics simulator (`src/simulate.py`) with a known storm boost |
+| #14-#16 | Double ML, curved-world result, ap lag sweep |
+| #17 | `src/causal_run.py`: every track C result on one table |
+| #18 | A2-A4: passive cohort, TLE cleaning, decay intervals (`orbit_intervals_a2_a4.parquet`) |
+| #19 | Residual validation: outlier filter, `Y_total`, TLE-blur check, notebook 04 |
+| B6 | Physics simulator (`src/simulate.py`) with a known storm boost (PR pending) |
 
 ## A: Piyush (orbit data)
 
-- [ ] **A2-A4 cohort and cleaning**: 400-800 km passive cohort, TLE cleaning, intervals
-      that never bridge a `main_onset`. Most likely bottleneck for real data.
-- [ ] **High-altitude control group**: 10-20 near-circular (ecc < 0.01) passive objects
+- [x] **A2-A4 cohort and cleaning** (#18): 400-800 km passive cohort, TLE cleaning, intervals
+      that never bridge a `main_onset`. 250 objects, 188,560 intervals; checked locally
+      Oct 30: no nulls, no duplicate keys, 0 intervals bridge a `main_onset`, all ecc < 0.01.
+      The cleaning flagged 0 inclination / RAAN jumps and 0 rolling-median outliers;
+      B's Hampel filter on the residual (`physics.remove_outliers`) is the outlier step.
+- [x] **High-altitude control group** (#18, 15 objects, 1,040-1,211 km): 10-20 near-circular (ecc < 0.01) passive objects
       at 1,000-1,500 km (old rocket bodies, debris), kept as a separate group. Not
       LAGEOS itself (~5,900 km).
 - [ ] **A7 precise-orbit check** (required): compare TLE-based decay with Swarm /
@@ -45,19 +52,27 @@ synthetic data.
 
 ## B: Sonu (space weather and physics)
 
-- [ ] **Residual validation**
-  - Outlier filter on residuals.
-  - TLE-blurring check: does the post-storm over-prediction survive smoothing?
-  - Baseline residual across all 20 storms; held-out quiet residual must be ~0.
-  - Two estimands:
+- [x] **Residual validation** (branch `B-residual-validation`, `notebooks/04_residual_validation.ipynb`;
+      two rocket bodies until the cohort exists)
+  - [x] Outlier filter on residuals: Hampel, 5-day window, k = 3.5 (`physics.remove_outliers`),
+        removes 4.2% of intervals (~1% on pure normal noise).
+  - [x] TLE-blurring check: prediction smoothed over 1, 2, 3 days and lagged (best lag -3 h).
+        May 2024 over-prediction vanishes with 3-day smoothing; Oct 2024 (41341) survives.
+  - [x] Baseline residual across all 20 storms (`physics.storm_baseline_residual`): no
+        over-prediction overall (MSIS 2.1 +4.0 m/day, 95% CI -4.8 to 12.8); held-out quiet
+        residual ~0 for both objects and models (|t| < 0.6) after the B fix below.
+  - [x] Two estimands:
     (a) total storm effect = observed minus MSIS 2.1 run with ap replaced by the
         storm's pre-storm quiet ap (median ap over days -10..-3; ap is global, so one
         value per storm). F10.7 stays at its actual values, so the difference isolates
         the storm from Sun UV;
     (b) model error = observed minus MSIS 2.1 with actual ap (current `Y_residual`).
-  - Report both, with and without the May 2024 and Oct 2024 storms.
-  - Save (a) as its own column (proposed name `Y_total`, m/day): the offset ratio
-    needs it for the storm loss.
+  - [x] Report both, with and without the May 2024 and Oct 2024 storms.
+  - [x] Save (a) as its own column `Y_total` (m/day): optional column in `schema.py`
+    (`OPTIONAL_COLUMNS`), built by `physics.quiet_ap_drivers` + `physics.add_total_effect`.
+  - [ ] Rerun notebook 04 on the full cohort (with B4-B5 at scale).
+  - [ ] Blur-free outcome for the extreme storms: total altitude lost from a calm day before
+        to a calm day after (decision rule below).
 - [ ] **B3 object catalog** (`src/objects.py`, branch `B3-objects`): CelesTrak SATCAT
       type, launch date, decay date; `is_active` (payloads with detected maneuvers in
       the year = active; debris, rocket bodies and payloads without maneuvers =
@@ -184,6 +199,13 @@ synthetic data.
 
 ## Decision log
 
+- **Oct 30, A2-A4 orbit pipeline (Piyush)**: selected 250 passive 400-800 km objects
+  with coverage on at least 8 of 9 Space-Track snapshots, plus 15 separate 1,000-1,500
+  km high-altitude controls. The Apr 2024-Apr 2025 download yielded 205,145 deduplicated
+  TLEs and 199,580 adjacent intervals; 5,300 onset-bridging intervals were omitted and
+  4,705 passive-climb intervals were flagged (`tle_ok = 0`). Cleaning thresholds remain
+  explicit parameters for review and sensitivity checks. Generated manifests, raw TLEs,
+  reports and `orbit_intervals_a2_a4.parquet` are under ignored `data/` for Drive sharing.
 - **Oct 30, B6 simulator (Sonu)**: with TLE noise, a near-zero interval next to an
   inserted main_onset epoch made the day -1 reference row noisy enough to shift every
   event-study coefficient, so epochs closer than 0.2 day to a main_onset are dropped.
@@ -230,3 +252,11 @@ synthetic data.
   strongly correlated (r = 0.74). On real data, if a later lag beats 0 h, report it as
   MSIS mistiming the storm response (it links to the slow-recovery finding), not as a
   reason to switch the main lag (Sonu, #16 review).
+- **Oct 30, residual validation (Sonu)**: drag sensitivity B is now the dt-weighted ratio of
+  sums, sum(observed * dt) / sum(driver * dt) on the quiet fit intervals, not the median of
+  observed / driver. After outlier removal the median left NORAD 41341 with a held-out MSIS 2.1
+  residual of -4.6 m/day (t = -2.2, ~3% low B); the ratio of sums gives |t| < 0.6 for both
+  objects and models. Verdict on the post-storm over-prediction: **extreme-storm driven**
+  (absent across the 20 storms, +1.2 m/day without May/Oct), and TLE blur in May 2024 (gone with
+  3-day smoothing); Oct 2024 partly survives. So the headline is not "models recover too slowly";
+  for the extreme storms add total altitude lost calm-day-before to calm-day-after.

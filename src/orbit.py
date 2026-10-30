@@ -12,6 +12,8 @@ from sgp4.api import Satrec, WGS72
 # SGP4 uses WGS-72 constants, so we use the same mu (km^3/s^2) for consistency
 MU_WGS72 = 398600.8
 EARTH_EQUATORIAL_RADIUS_KM = 6378.137
+DEFAULT_MAX_GAP_DAYS = 5.0
+DEFAULT_CLIMB_NOISE_MULTIPLIER = 3.0
 
 
 def semi_major_axis_km(no_kozai_rad_per_min, mu=MU_WGS72):
@@ -105,6 +107,38 @@ def _raan_rate_residual_deg_per_day(raan_deg, epoch, window):
     return (rate - baseline).abs()
 
 
+def tle_noise_by_object(tles, rolling_window=11, min_noise_km=0.01):
+    """Estimate each object's semi-major-axis TLE noise in km.
+
+    The estimate is 1.4826 times the local rolling-median residual MAD. This
+    leaves the physical decay trend in place while measuring the point-to-point
+    fitting noise around it. A small floor avoids treating a perfectly smooth
+    synthetic or very short history as noise-free.
+    """
+    required = {"norad_id", "epoch", "a_km"}
+    missing = required.difference(tles.columns)
+    if missing:
+        raise ValueError(f"TLE frame is missing required columns: {sorted(missing)}")
+    if rolling_window < 3 or rolling_window % 2 == 0:
+        raise ValueError("rolling_window must be an odd integer >= 3")
+    if min_noise_km <= 0:
+        raise ValueError("min_noise_km must be > 0")
+
+    estimates = {}
+    for norad_id, group in tles.sort_values("epoch").groupby("norad_id", sort=False):
+        a = group["a_km"].reset_index(drop=True)
+        trend = a.rolling(rolling_window, center=True, min_periods=3).median()
+        residual = (a - trend).dropna()
+        if len(residual):
+            centered = residual - residual.median()
+            noise = 1.4826 * centered.abs().median()
+        else:
+            noise = np.nan
+        estimates[int(norad_id)] = max(float(noise) if pd.notna(noise) else 0.0,
+                                  min_noise_km)
+    return pd.Series(estimates, name="tle_noise_km", dtype="float64")
+
+
 def clean_tle_history(
     df,
     *,
@@ -177,9 +211,42 @@ def clean_tle_history(
         {"step": "inclination jumps flagged", "count": reasons["inclination_jump"]},
         {"step": "RAAN jumps flagged", "count": reasons["raan_jump"]},
         {"step": "rolling-median outliers flagged", "count": reasons["rolling_median_outlier"]},
+        {"step": "TLEs failed point-level checks", "count": int((clean["tle_ok"] == 0).sum())},
         {"step": "TLEs retained by point-level checks", "count": int(clean["tle_ok"].sum())},
     ])
     return clean.reset_index(drop=True), report
+
+
+def cleaning_sensitivity(tles, settings=None):
+    """Report point-level TLE cleaning shares under named threshold settings.
+
+    The default tight setting is deliberately stricter than the production setting
+    and is a diagnostic report, not a replacement analysis filter.
+    """
+    if settings is None:
+        settings = {
+            "baseline": {},
+            "tight": {
+                "max_inc_jump_deg": 0.25,
+                "max_raan_rate_residual_deg_per_day": 0.5,
+                "rolling_mad_threshold": 5.0,
+                "outlier_floor_km": 0.25,
+            },
+        }
+    rows = []
+    for name, kwargs in settings.items():
+        cleaned, report = clean_tle_history(tles, **kwargs)
+        reason_counts = report.set_index("step")["count"]
+        rows.append({
+            "setting": name,
+            "tle_count": len(cleaned),
+            "flagged": int((cleaned["tle_ok"] == 0).sum()),
+            "flagged_share": float((cleaned["tle_ok"] == 0).mean()),
+            "inclination_jumps": int(reason_counts["inclination jumps flagged"]),
+            "raan_jumps": int(reason_counts["RAAN jumps flagged"]),
+            "rolling_outliers": int(reason_counts["rolling-median outliers flagged"]),
+        })
+    return pd.DataFrame(rows)
 
 
 def build_decay_intervals(
@@ -187,26 +254,38 @@ def build_decay_intervals(
     storms,
     *,
     passive=True,
-    climb_tolerance_km=0.0,
+    climb_tolerance_km=None,
+    climb_noise_multiplier=DEFAULT_CLIMB_NOISE_MULTIPLIER,
+    max_gap_days=DEFAULT_MAX_GAP_DAYS,
 ):
     """Build adjacent-TLE decay intervals and omit any interval crossing an onset.
 
-    ``storms`` must contain ``main_onset`` timestamps. Intervals are retained with
-    ``tle_ok=0`` when a point-level check failed or a passive object's semi-major
-    axis climbed beyond ``climb_tolerance_km``; this keeps the cleaning share
-    auditable. Intervals spanning a storm onset are omitted entirely so later
-    physics joins cannot use a decay rate that averages across day 0.
+    ``storms`` must contain ``main_onset`` timestamps. Intervals longer than
+    ``max_gap_days`` and those spanning an onset are omitted. Intervals are retained
+    with ``tle_ok=0`` when a point-level check failed or a passive object's mean
+    semi-major axis climbed by more than three times its robust TLE-noise estimate.
+    This keeps the cleaning share auditable without treating a tiny fitted-element
+    rise as physical climb.
     """
     if "tle_ok" not in tles:
         raise ValueError("Call clean_tle_history first; expected a 'tle_ok' column")
     if "main_onset" not in storms:
         raise ValueError("storms must contain a 'main_onset' column")
-    if climb_tolerance_km < 0:
+    if climb_tolerance_km is not None and climb_tolerance_km < 0:
         raise ValueError("climb_tolerance_km must be >= 0")
+    if climb_noise_multiplier <= 0 or max_gap_days <= 0:
+        raise ValueError("climb_noise_multiplier and max_gap_days must be > 0")
 
     onsets = pd.DatetimeIndex(pd.to_datetime(storms["main_onset"]))
+    if climb_tolerance_km is None:
+        noise = tle_noise_by_object(tles)
+        tolerances = noise * climb_noise_multiplier
+    else:
+        tolerances = pd.Series(float(climb_tolerance_km),
+                               index=tles["norad_id"].unique(), dtype="float64")
     rows = []
     omitted_onset = 0
+    omitted_gap = 0
     climb_flags = 0
     invalid_endpoint = 0
     for norad_id, group in tles.sort_values("epoch").groupby("norad_id", sort=False):
@@ -216,14 +295,18 @@ def build_decay_intervals(
             t0, t1 = pd.Timestamp(left["epoch"]), pd.Timestamp(right["epoch"])
             if t1 <= t0:
                 continue
+            dt_days = (t1 - t0).total_seconds() / 86400.0
+            if dt_days > max_gap_days:
+                omitted_gap += 1
+                continue
             # An onset exactly at an interval boundary does not lie inside it.
             if ((onsets > t0) & (onsets < t1)).any():
                 omitted_onset += 1
                 continue
 
-            dt_days = (t1 - t0).total_seconds() / 86400.0
             da_km = float(right["a_km"] - left["a_km"])
-            climb = bool(passive and da_km > climb_tolerance_km)
+            tolerance = float(tolerances.loc[int(norad_id)])
+            climb = bool(passive and da_km > tolerance)
             endpoints_ok = bool(left["tle_ok"] == 1 and right["tle_ok"] == 1)
             climb_flags += int(climb)
             invalid_endpoint += int(not endpoints_ok)
@@ -239,6 +322,7 @@ def build_decay_intervals(
                 "alt_km": (float(left["a_km"]) + float(right["a_km"])) / 2 - EARTH_EQUATORIAL_RADIUS_KM,
                 "ecc": (float(left["ecc"]) + float(right["ecc"])) / 2,
                 "inc_deg": (float(left["incl_deg"]) + float(right["incl_deg"])) / 2,
+                "climb_tolerance_km": tolerance,
                 "local_solar_time": float(np.degrees(np.angle(
                     np.exp(1j * np.radians(float(left["local_solar_time"]) * 15.0))
                     + np.exp(1j * np.radians(float(right["local_solar_time"]) * 15.0)))
@@ -249,10 +333,11 @@ def build_decay_intervals(
             })
     columns = ["norad_id", "t_start", "t_end", "t_mid", "dt_days", "da_km",
                "da_dt_km_per_day", "alt_km", "ecc", "inc_deg", "local_solar_time",
-               "day_of_year", "tle_ok", "climb_flag"]
+               "day_of_year", "climb_tolerance_km", "tle_ok", "climb_flag"]
     intervals = pd.DataFrame(rows, columns=columns)
     report = pd.DataFrame([
         {"step": "intervals built", "count": len(intervals)},
+        {"step": f"interval gaps > {max_gap_days:g} days omitted", "count": omitted_gap},
         {"step": "intervals crossing storm onset omitted", "count": omitted_onset},
         {"step": "passive climb intervals flagged", "count": climb_flags},
         {"step": "intervals with failed endpoint checks", "count": invalid_endpoint},

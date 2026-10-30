@@ -164,6 +164,14 @@ synthetic data.
 
 ## Decision log
 
+- **Oct 30, A2-A4 orbit pipeline (Piyush)**: selected 250 passive 400-800 km objects
+  with coverage on at least 8 of 9 Space-Track snapshots, plus 15 separate 1,000-1,500
+  km high-altitude controls. The Apr 2024-Apr 2025 download yielded 205,145 deduplicated
+  TLEs and 199,580 adjacent intervals; 5,300 onset-bridging intervals were omitted and
+  4,705 passive-climb intervals were flagged (`tle_ok = 0`). Cleaning thresholds remain
+  explicit parameters for review and sensitivity checks. Generated manifests, raw TLEs,
+  reports and `orbit_intervals_a2_a4.parquet` are under ignored `data/` for Drive sharing.
+
 - **Oct 27, DML review points (Holla)**: high-altitude negative control added (A, B, C, D
   tasks above); hourly ap returned as a space weather frame, not via `attrs`; DML
   treatment is interval-mean ap in nT, described the same way in the paper; DML folds

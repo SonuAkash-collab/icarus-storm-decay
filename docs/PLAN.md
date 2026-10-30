@@ -31,6 +31,7 @@ synthetic data.
 | #10 | This planning file |
 | #12 | Event-study checks (#7), offset ratio (#8) and high-altitude group / hourly ap (#9) brought to `main`, with the #6-#9 review fixes and the curved UV option |
 | #13 | Curved UV error fades above 800 km |
+| B6 | Physics simulator (`src/simulate.py`) with a known storm boost |
 
 ## A: Piyush (orbit data)
 
@@ -63,11 +64,30 @@ synthetic data.
       passive); DISCOSweb area-to-mass where available. Also save `area_to_mass` and
       `drag_sensitivity_catalog = 2.2 * area_to_mass`. Output
       `data/processed/objects.parquet`. Tests + notebook 05.
-- [ ] **B6 physics simulator** (`src/simulate.py`, branch `B6-simulator`): synthetic
-      orbits decaying through pymsis MSIS 2.1 density with a storm boost of known size,
-      TLE-style noise that grows during storms, output validated with
-      `schema.validate`. Include a few objects above 1,000 km. Test: the physics
-      residual pipeline recovers the planted boost.
+- [x] **B6 physics simulator** (`src/simulate.py`, branch `B6-physics-simulator`):
+      synthetic orbits decaying through pymsis MSIS 2.1 density with a storm boost of
+      known size, TLE-style noise that grows during storms, output validated with
+      `schema.validate`. Done:
+  - [x] Space weather: real hourly frame + storm catalog if passed, otherwise synthetic
+        hourly ap / f107 / f107_81d with storms planted at given dates (default one
+        every 25 days).
+  - [x] Objects: passive, near-circular, 400-800 km, random true B; `n_high_alt`
+        objects at 1,000-1,500 km (default 3) with catalog B, `drag_source` =
+        "catalog" and `Y_log_ratio` NaN.
+  - [x] Truth: da/dt = -B rho (1 + boost(event_day)) sqrt(mu a), rho from MSIS 2.1 on
+        a circular-orbit track every 20 min, inputs passed explicitly (no download).
+        Default boost 0.5 on days 0..2, gone by day 5; negative boost allowed.
+  - [x] Fake TLEs: irregular epochs (~1/day, ~2/day in storms, one at each
+        main_onset), a noise 20 m quiet and 3x in storms, optional trailing 1-3 day
+        smoothing (`smooth_days`).
+  - [x] Pipeline: `orbit.decay_rates` -> driver (same samples, density and formula as
+        `physics.density_drivers`) -> `physics.label_intervals` -> quiet fit of B ->
+        `physics.add_predictions`; extra columns `true_effect`, `true_decay`,
+        `obs_decay`, `true_drag_sensitivity`, `drag_source`, `role`.
+  - [x] Tests (`tests/test_simulate.py`, ~25 s): no noise -> prediction follows the
+        truth (median error < 1%); boost 0 -> residual ~0; held-out quiet residual ~0;
+        planted boost (days 0..2) inside the event-study 95% interval; noise larger
+        in storms; negative boost; smoothing delays the storm; schema columns.
 - [ ] **B4-B5 at scale** (after A2 is merged): re-run `physics.py` for the whole
       cohort. Where the quiet-time fit of drag sensitivity is unusable (high-altitude
       group: predicted decay ~0, so observed / driver blows up), fall back to
@@ -163,6 +183,14 @@ synthetic data.
 - Held-out quiet residual isn't ~0: stop and fix drag sensitivity first.
 
 ## Decision log
+
+- **Oct 30, B6 simulator (Sonu)**: with TLE noise, a near-zero interval next to an
+  inserted main_onset epoch made the day -1 reference row noisy enough to shift every
+  event-study coefficient, so epochs closer than 0.2 day to a main_onset are dropped.
+  With 6 storms the wild-bootstrap interval missed zero on null data; the recovery
+  test uses 300 days (11 storms) and the days 0..2 short-run effect. The quiet fit of
+  B is poor above ~700 km (decay of a few m/day vs ~30 m/day TLE noise per interval),
+  as on real data; it adds little to the residual in m/day there.
 
 - **Oct 27, DML review points (Holla)**: high-altitude negative control added (A, B, C, D
   tasks above); hourly ap returned as a space weather frame, not via `attrs`; DML

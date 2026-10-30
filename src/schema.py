@@ -109,6 +109,63 @@ NOT_NULL = ["norad_id", "t_mid", "dt_days", "alt_km", "inc_deg", "local_solar_ti
             "day_of_year", "ecc", "tle_ok", "is_active", "T_ap_int", "T_storm", "f107", "f107_81d"]
 
 
+# Objects table (src/objects.py): one row per object, joined to the analysis table on
+# norad_id. Built by B3 from CelesTrak SATCAT, ESA DISCOSweb and the A2-A4 intervals.
+OBJECT_COLUMNS = {
+    "norad_id":                 ("int64",          "",       "B", "Object ID"),
+    "object_name":              ("string",         "",       "B", "SATCAT name"),
+    "object_type":              ("string",         "",       "B", "debris / rocket body / payload / unknown"),
+    "launch_date":              ("datetime64[ns]", "UTC",    "B", "SATCAT launch date"),
+    "decay_date":               ("datetime64[ns]", "UTC",    "B", "SATCAT decay date (NaT if in orbit)"),
+    "mass_kg":                  ("float64",        "kg",     "B", "DISCOSweb mass"),
+    "xsect_avg_m2":             ("float64",        "m^2",    "B", "DISCOSweb average cross-section"),
+    "area_to_mass":             ("float64",        "m^2/kg", "B", "xsect_avg_m2 / mass_kg"),
+    "drag_sensitivity_catalog": ("float64",        "m^2/kg", "B", "2.2 * area_to_mass (Cd = 2.2)"),
+    "maneuver_checked":         ("int64",          "",       "B", "1 if searched for maneuvers (payloads, unknown types)"),
+    "n_maneuvers":              ("int64",          "",       "B", "Sustained semi-major-axis rises found"),
+    "is_passive":               ("int64",          "",       "B", "1 = passive (debris, rocket body, payload without maneuvers)"),
+    "is_active":                ("int64",          "",       "B", "1 - is_passive, same coding as the analysis table"),
+}
+OBJECT_TYPES = ["debris", "rocket body", "payload", "unknown"]
+
+
+def object_problems(df):
+    """List of violations of the objects table (empty list = valid)."""
+    out = []
+    missing = [c for c in OBJECT_COLUMNS if c not in df]
+    if missing:
+        return [f"missing columns: {missing}"]
+    bad = [c for c in df.columns if any(f in c.lower() for f in FORBIDDEN)]
+    if bad:
+        out.append(f"forbidden columns (BSTAR / density): {bad}")
+    if df["norad_id"].isna().any() or df["norad_id"].duplicated().any():
+        out.append("norad_id must be unique and not null")
+    if not df["object_type"].isin(OBJECT_TYPES).all():
+        out.append(f"object_type must be one of {OBJECT_TYPES}")
+    for c in ["is_passive", "is_active", "maneuver_checked"]:
+        if not df[c].isin([0, 1]).all():
+            out.append(f"{c} must be 0 or 1")
+    if not (df["is_passive"] + df["is_active"] == 1).all():
+        out.append("is_active must equal 1 - is_passive")
+    if (df["object_type"].isin(["debris", "rocket body"]) & (df["is_passive"] == 0)).any():
+        out.append("debris and rocket bodies are always passive")
+    for c in ["mass_kg", "xsect_avg_m2", "area_to_mass", "drag_sensitivity_catalog"]:
+        if (df[c] <= 0).any():
+            out.append(f"{c} must be > 0 where present")
+    return out
+
+
+def validate_objects(df):
+    """Raise ValueError listing every problem; return the objects table with its dtypes."""
+    found = object_problems(df)
+    if found:
+        raise ValueError("Objects table check failed:\n- " + "\n- ".join(found))
+    df = df.copy()
+    for c, (dtype, *_) in OBJECT_COLUMNS.items():
+        df[c] = df[c].astype(dtype)
+    return df[list(OBJECT_COLUMNS) + [c for c in df.columns if c not in OBJECT_COLUMNS]]
+
+
 def empty_frame():
     """Zero-row table with every column and dtype."""
     return pd.DataFrame({c: pd.Series(dtype=dtype) for c, (dtype, *_) in COLUMNS.items()})

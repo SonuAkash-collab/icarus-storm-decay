@@ -31,6 +31,8 @@ synthetic data.
 | #10 | This planning file |
 | #12 | Event-study checks (#7), offset ratio (#8) and high-altitude group / hourly ap (#9) brought to `main`, with the #6-#9 review fixes and the curved UV option |
 | #13 | Curved UV error fades above 800 km |
+| #14-#16 | Double ML, curved-world result, ap lag sweep |
+| #17 | `src/causal_run.py`: every track C result on one table |
 
 ## A: Piyush (orbit data)
 
@@ -44,19 +46,27 @@ synthetic data.
 
 ## B: Sonu (space weather and physics)
 
-- [ ] **Residual validation**
-  - Outlier filter on residuals.
-  - TLE-blurring check: does the post-storm over-prediction survive smoothing?
-  - Baseline residual across all 20 storms; held-out quiet residual must be ~0.
-  - Two estimands:
+- [x] **Residual validation** (branch `B-residual-validation`, `notebooks/04_residual_validation.ipynb`;
+      two rocket bodies until the cohort exists)
+  - [x] Outlier filter on residuals: Hampel, 5-day window, k = 3.5 (`physics.remove_outliers`),
+        removes 4.2% of intervals (~1% on pure normal noise).
+  - [x] TLE-blurring check: prediction smoothed over 1, 2, 3 days and lagged (best lag -3 h).
+        May 2024 over-prediction vanishes with 3-day smoothing; Oct 2024 (41341) survives.
+  - [x] Baseline residual across all 20 storms (`physics.storm_baseline_residual`): no
+        over-prediction overall (MSIS 2.1 +4.0 m/day, 95% CI -4.8 to 12.8); held-out quiet
+        residual ~0 for both objects and models (|t| < 0.6) after the B fix below.
+  - [x] Two estimands:
     (a) total storm effect = observed minus MSIS 2.1 run with ap replaced by the
         storm's pre-storm quiet ap (median ap over days -10..-3; ap is global, so one
         value per storm). F10.7 stays at its actual values, so the difference isolates
         the storm from Sun UV;
     (b) model error = observed minus MSIS 2.1 with actual ap (current `Y_residual`).
-  - Report both, with and without the May 2024 and Oct 2024 storms.
-  - Save (a) as its own column (proposed name `Y_total`, m/day): the offset ratio
-    needs it for the storm loss.
+  - [x] Report both, with and without the May 2024 and Oct 2024 storms.
+  - [x] Save (a) as its own column `Y_total` (m/day): optional column in `schema.py`
+    (`OPTIONAL_COLUMNS`), built by `physics.quiet_ap_drivers` + `physics.add_total_effect`.
+  - [ ] Rerun notebook 04 on the full cohort (with B4-B5 at scale).
+  - [ ] Blur-free outcome for the extreme storms: total altitude lost from a calm day before
+        to a calm day after (decision rule below).
 - [ ] **B3 object catalog** (`src/objects.py`, branch `B3-objects`): CelesTrak SATCAT
       type, launch date, decay date; `is_active` (payloads with detected maneuvers in
       the year = active; debris, rocket bodies and payloads without maneuvers =
@@ -202,3 +212,11 @@ synthetic data.
   strongly correlated (r = 0.74). On real data, if a later lag beats 0 h, report it as
   MSIS mistiming the storm response (it links to the slow-recovery finding), not as a
   reason to switch the main lag (Sonu, #16 review).
+- **Oct 30, residual validation (Sonu)**: drag sensitivity B is now the dt-weighted ratio of
+  sums, sum(observed * dt) / sum(driver * dt) on the quiet fit intervals, not the median of
+  observed / driver. After outlier removal the median left NORAD 41341 with a held-out MSIS 2.1
+  residual of -4.6 m/day (t = -2.2, ~3% low B); the ratio of sums gives |t| < 0.6 for both
+  objects and models. Verdict on the post-storm over-prediction: **extreme-storm driven**
+  (absent across the 20 storms, +1.2 m/day without May/Oct), and TLE blur in May 2024 (gone with
+  3-day smoothing); Oct 2024 partly survives. So the headline is not "models recover too slowly";
+  for the extreme storms add total altitude lost calm-day-before to calm-day-after.

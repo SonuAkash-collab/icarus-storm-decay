@@ -28,6 +28,12 @@ Columns (who builds them: A = orbit data, B = space weather + physics):
     Y_residual_nrl    B  the same with NRLMSISE-00 (resid_nrlmsise00 * 1000), robustness
     Y_log_ratio       B  log(observed / predicted); NaN when the object is not seen
                          to decay (observed >= 0), as in physics.add_predictions
+    Y_total           B  optional: total storm effect (m/day) = observed minus MSIS 2.1
+                         run with ap replaced by the storm's quiet ap (median ap over
+                         days -10..-3 of main_onset), actual F10.7 kept. Negative = extra
+                         decay caused by the storm. Rows outside every event window use
+                         the actual ap (Y_total = Y_residual there).
+                         physics.add_total_effect: total_msis21 * 1000
     T_ap_int          B  ap integrated over the interval (nT * day), continuous treatment
     T_storm           B  1 if the interval overlaps [main_onset, recovery_end] of a storm
     storm_id          B  storm whose event window (-10..+20 days around main_onset)
@@ -46,6 +52,7 @@ Rules the table enforces (see validate):
 - Intervals never bridge a main_onset (task A4); bridges_onset checks it.
 - Analysis code takes its rows from main_sample (passive, near-circular, clean TLEs).
 - Extra columns are allowed (e.g. true_effect in synthetic data), missing ones are not.
+  OPTIONAL_COLUMNS (Y_total) are type-checked when present but may be missing.
 """
 
 from pathlib import Path
@@ -80,9 +87,13 @@ COLUMNS = {
     "f107_81d":         ("float64",        "sfu",           "B", "81-day mean F10.7"),
     "drag_sensitivity": ("float64",        "m^2/kg",        "B", "Quiet-time drag sensitivity (replaces BSTAR)"),
 }
+# Optional columns: cast and checked when present, not required (synthetic tables lack them)
+OPTIONAL_COLUMNS = {
+    "Y_total":          ("float64",        "m/day",         "B", "Observed minus MSIS 2.1 with the storm's quiet ap (total storm effect)"),
+}
 KEY = ["norad_id", "t_mid"]
 
-OUTCOMES = ["Y_residual", "Y_residual_nrl", "Y_log_ratio"]
+OUTCOMES = ["Y_residual", "Y_residual_nrl", "Y_log_ratio", "Y_total"]
 TREATMENTS = ["T_ap_int", "T_storm"]
 # Adjustment set from the causal graph (src/dag.py checks it)
 CONFOUNDERS = ["f107", "f107_81d", "day_of_year", "alt_km", "inc_deg",
@@ -105,18 +116,21 @@ def empty_frame():
 
 def describe():
     """Column, dtype, unit, builder and meaning as a table (for docs and the paper)."""
-    return pd.DataFrame([(c, *v) for c, v in COLUMNS.items()],
-                        columns=["column", "dtype", "unit", "built_by", "meaning"])
+    out = pd.DataFrame([(c, *v) for c, v in {**COLUMNS, **OPTIONAL_COLUMNS}.items()],
+                       columns=["column", "dtype", "unit", "built_by", "meaning"])
+    out["required"] = out["column"].isin(list(COLUMNS))
+    return out
 
 
 def coerce(df):
     """Cast schema columns to their dtypes and put them first (extra columns kept, after)."""
     df = df.copy()
-    for c, (dtype, *_) in COLUMNS.items():
+    known = {**COLUMNS, **OPTIONAL_COLUMNS}
+    for c, (dtype, *_) in known.items():
         if c in df:
             df[c] = df[c].astype(dtype)
-    extra = [c for c in df.columns if c not in COLUMNS]
-    return df[[c for c in COLUMNS if c in df] + extra]
+    extra = [c for c in df.columns if c not in known]
+    return df[[c for c in known if c in df] + extra]
 
 
 def problems(df):

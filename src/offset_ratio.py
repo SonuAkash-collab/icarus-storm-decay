@@ -97,9 +97,13 @@ def adjust_controls(table, storms):
 
 
 def _clean_actives(table, max_ecc=MAX_ECC):
-    """Active satellites that can be matched: near-circular, clean TLEs, known drag."""
-    return table[(table["is_active"] == 1) & (table["ecc"] < max_ecc) & (table["tle_ok"] == 1)
-                 & table["drag_sensitivity"].notna()]
+    """Active satellites that can be matched: near-circular, clean TLEs, known drag, and
+    not flagged as failed / deorbiting (free_drag = 1, build_table.free_drag_flags)."""
+    ok = ((table["is_active"] == 1) & (table["ecc"] < max_ecc) & (table["tle_ok"] == 1)
+          & table["drag_sensitivity"].notna())
+    if "free_drag" in table:
+        ok &= table["free_drag"] != 1
+    return table[ok]
 
 
 def windows_for(storm, recovery_days=RECOVERY_DAYS):
@@ -215,6 +219,44 @@ def storm_pairs(table, storms, actives=None, passives=None, n_twins=N_TWINS, cal
     pairs = pd.concat(out, ignore_index=True) if out else pd.DataFrame(
         columns=["storm_id", "active", "n_twins", "loss", "duck_gain", "recovery_gain"])
     return pairs, (pd.concat(bal) if bal else pd.DataFrame())
+
+
+def match_diagnostics(table, storms, outcome="Y_residual", caliper=CALIPER, recovery_days=RECOVERY_DAYS,
+                      min_cover=0.5):
+    """Why storm_pairs finds (or does not find) pairs, one row per storm.
+
+    usable_actives / usable_passives: objects covering every window after the
+    neighbouring-storm cut (0 for both = the storm is contaminated); nearest_median /
+    nearest_min: standardised distance from each usable active to its nearest passive
+    (the caliper is `caliper`); matched_actives: actives with at least one twin.
+    """
+    table, _ = adjust_controls(table.assign(Y_residual=table[outcome]), storms)
+    actives, passives = _clean_actives(table), main_sample(table)
+    win = contamination_windows(storms, recovery_days)
+    rows = []
+    for s in storms.to_dict("records"):
+        def clean(r):
+            dirty = pd.Series(False, index=r.index)
+            for other, start, end in win:
+                if other != s["storm_id"]:
+                    dirty |= (r["t_mid"] >= start) & (r["t_mid"] <= end)
+            return r[~dirty]
+        a_rows, p_rows = clean(actives), clean(passives)
+        a_rates, _ = window_rates(a_rows, s, min_cover, recovery_days)
+        p_rates, _ = window_rates(p_rows, s, min_cover, recovery_days)
+        fa = object_features(a_rows, s).reindex(a_rates.index).dropna()
+        fp = object_features(p_rows, s).reindex(p_rates.index).dropna()
+        near = np.array([])
+        if len(fa) and len(fp):
+            scale = fp[MATCH_VARS].std().replace(0, 1)
+            A, P = (fa[MATCH_VARS] / scale).to_numpy(), (fp[MATCH_VARS] / scale).to_numpy()
+            near = np.sqrt(((A[:, None, :] - P[None, :, :]) ** 2).sum(axis=2)).min(axis=1)
+        rows.append({"storm_id": s["storm_id"], "main_onset": s["main_onset"],
+                     "usable_actives": len(fa), "usable_passives": len(fp),
+                     "nearest_median": np.median(near) if len(near) else np.nan,
+                     "nearest_min": near.min() if len(near) else np.nan,
+                     "matched_actives": int((near <= caliper).sum())})
+    return pd.DataFrame(rows)
 
 
 def shares(pairs):

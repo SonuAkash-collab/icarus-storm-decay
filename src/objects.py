@@ -42,6 +42,8 @@ PROCESSED_DIR = ROOT / "data" / "processed"
 OBJECTS_PATH = PROCESSED_DIR / "objects.parquet"
 # Interval table from the A2-A4 pipeline (orbit.build_decay_intervals)
 INTERVALS_PATH = PROCESSED_DIR / "orbit_intervals_a2_a4.parquet"
+# Active-satellite intervals (src/active_cohort.py), searched too when present
+ACTIVE_INTERVALS_PATH = PROCESSED_DIR / "orbit_intervals_actives.parquet"
 
 SATCAT_URL = "https://celestrak.org/satcat/records.php"
 SATCAT_CACHE = "satcat_records.json"
@@ -365,11 +367,14 @@ def build_objects(norad_ids, intervals=None, out_path=None, force=False, token=N
     table and save it to data/processed/objects.parquet.
 
     intervals: decay intervals for the maneuver search; by default the A2-A4 table
-    (INTERVALS_PATH) if it exists. Without them every payload counts as active.
+    (INTERVALS_PATH) plus the active-satellite intervals (ACTIVE_INTERVALS_PATH), where
+    they exist. Without them every payload counts as active.
     """
     norad_ids = sorted({int(i) for i in norad_ids})
-    if intervals is None and INTERVALS_PATH.exists():
-        intervals = pd.read_parquet(INTERVALS_PATH)
+    if intervals is None:
+        parts = [pd.read_parquet(p) for p in (INTERVALS_PATH, ACTIVE_INTERVALS_PATH) if p.exists()]
+        intervals = pd.concat([p[[c for c in p if c in parts[0]]] for p in parts],
+                              ignore_index=True) if parts else None
     if intervals is None:
         warnings.warn(f"No decay intervals ({INTERVALS_PATH.name}); payloads are counted as active")
     satcat = fetch_satcat(norad_ids, force=force, session=session)

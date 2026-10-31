@@ -67,3 +67,19 @@ def test_no_outcome_raises(fake, tmp_path):
     table, storms = fake
     with pytest.raises(ValueError, match="none of the outcomes"):
         cr.run(table.drop(columns="Y_residual"), storms, out_dir=tmp_path, fig_dir=None, **QUICK)
+
+
+def test_actives_without_twins_report_instead_of_failing(fake, tmp_path):
+    # Real data: no passive object near the Starlink orbits, so no pair inside the caliper
+    table, storms = fake
+    table = table.assign(inc_deg=table["inc_deg"].where(table["is_active"] == 0, 170.0))
+    out = cr.offset_part(table, storms, n_boot=9, n_placebo_reps=2)
+    assert "error" in out and "summary" not in out
+    d = out["diagnostics"]
+    assert (d["matched_actives"] == 0).all() and (d.loc[d["usable_actives"] > 0, "nearest_min"] > 0.5).all()
+    assert len(out["placebo"]) == 2
+    cr.write({"sample_report": pd.DataFrame(columns=["filter", "removed", "share"]), "event_study": {},
+              "high_alt": {}, "offset": out}, tmp_path)
+    text = (tmp_path / "summary.md").read_text()
+    assert "Not estimated" in text and "Debris placebo" in text
+    assert (tmp_path / "offset_match_diagnostics.csv").exists() and not (tmp_path / "offset_ratio.csv").exists()

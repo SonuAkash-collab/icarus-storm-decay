@@ -65,14 +65,25 @@ def high_alt_control(table, storms, outcome, n_boot=999, seed=0):
 
 
 def offset_part(table, storms, n_boot=999, n_placebo_reps=20, seed=0):
-    """Offset ratio with both recovery windows, balance and the placebo spread."""
+    """Offset ratio with both recovery windows, balance and the placebo spread.
+
+    If no storm (or only one) has an active satellite with a passive twin inside the
+    caliper, the offset ratio is not estimated: the result then has `error` (the reason)
+    instead of summary / pairs / balance, plus the per-storm match diagnostics. The
+    debris placebo needs passive objects only and is run either way.
+    """
     outcome = OFFSET_OUTCOME if OFFSET_OUTCOME in available_outcomes(table) else "Y_residual"
-    summary, pairs, smd = orr.offset_ratio(table, storms, outcome=outcome, n_boot=n_boot, seed=seed)
-    return {"outcome": outcome, "summary": summary, "pairs": pairs, "balance": smd,
+    out = {"outcome": outcome,
+           "diagnostics": orr.match_diagnostics(table, storms, outcome=outcome),
+           "placebo": orr.placebo_distribution(table, storms, n_reps=n_placebo_reps, seed=seed,
+                                               outcome=outcome)}
+    try:
+        summary, pairs, smd = orr.offset_ratio(table, storms, outcome=outcome, n_boot=n_boot, seed=seed)
+    except ValueError as e:
+        return {**out, "error": str(e)}
+    return {**out, "summary": summary, "pairs": pairs, "balance": smd,
             "recovery_sensitivity": orr.recovery_sensitivity(table, storms, outcome=outcome,
-                                                             n_boot=n_boot, seed=seed),
-            "placebo": orr.placebo_distribution(table, storms, n_reps=n_placebo_reps, seed=seed,
-                                                outcome=outcome)}
+                                                             n_boot=n_boot, seed=seed)}
 
 
 def run(table, storms, out_dir=OUT_DIR, outcomes=None, n_placebo=500, n_boot=999,
@@ -122,10 +133,14 @@ def write(out, out_dir):
     if off is None:
         (out_dir / "summary.md").write_text(summary_text(out))
         return
+    off["diagnostics"].to_csv(out_dir / "offset_match_diagnostics.csv", index=False)
+    off["placebo"].to_csv(out_dir / "offset_placebo.csv", index=False)
+    if "error" in off:
+        (out_dir / "summary.md").write_text(summary_text(out))
+        return
     off["summary"].to_csv(out_dir / "offset_ratio.csv")
     off["pairs"].to_csv(out_dir / "offset_pairs.csv", index=False)
     off["recovery_sensitivity"].to_csv(out_dir / "offset_recovery_sensitivity.csv")
-    off["placebo"].to_csv(out_dir / "offset_placebo.csv", index=False)
     (out_dir / "summary.md").write_text(summary_text(out))
 
 
@@ -160,8 +175,25 @@ def summary_text(out):
     if off is None:
         lines += ["", "## Offset ratio", "", "Not run: the table has no active satellites."]
         return "\n".join(lines) + "\n"
-    s = off["summary"]
     lines += ["", f"## Offset ratio (storm loss on {off['outcome']})", ""]
+    placebo = (f"- Debris placebo over {len(off['placebo'])} random sets: ducking share mean "
+               f"{off['placebo']['ducking_share'].mean():.3f}, SD {off['placebo']['ducking_share'].std():.3f}; "
+               f"offset ratio mean {off['placebo']['offset_ratio'].mean():.3f}, "
+               f"SD {off['placebo']['offset_ratio'].std():.3f}.")
+    if "error" in off:
+        d = off["diagnostics"]
+        usable = d[d["usable_actives"] > 0]
+        lines += [f"**Not estimated: {off['error']}.**", "",
+                  f"- Storms with usable active satellites after the neighbouring-storm cut: {len(usable)} of {len(d)}.",
+                  f"- Nearest passive twin (standardised distance, caliper {orr.CALIPER}): median "
+                  f"{usable['nearest_median'].median():.2f}, smallest {usable['nearest_min'].min():.2f}."
+                  if len(usable) else "- No storm has usable active satellites.",
+                  placebo, "", "| Storm | Onset | Usable actives | Usable passives | Nearest twin (median) | Matched |",
+                  "|---|---|---|---|---|---|"]
+        lines += [f"| {r.storm_id} | {r.main_onset:%Y-%m-%d} | {r.usable_actives} | {r.usable_passives} "
+                  f"| {r.nearest_median:.2f} | {r.matched_actives} |" for r in usable.itertuples()]
+        return "\n".join(lines) + "\n"
+    s = off["summary"]
     if off["outcome"] != OFFSET_OUTCOME:
         lines += [f"**{OFFSET_OUTCOME} is missing, so the loss uses {off['outcome']}. Do not quote these "
                   "numbers for real data.**", ""]
@@ -171,8 +203,7 @@ def summary_text(out):
               f"- Recovery share (imprecise): {_fmt(s.loc['recovery_share'])}.",
               f"- Offset ratio: {_fmt(s.loc['offset_ratio'])}.",
               f"- Largest |SMD| after matching: {off['balance'].abs().max():.3f} (bar 0.1).",
-              f"- Debris placebo over {len(off['placebo'])} random sets: ducking share mean "
-              f"{off['placebo']['ducking_share'].mean():.3f}, SD {off['placebo']['ducking_share'].std():.3f}.",
+              placebo,
               "", "| Recovery window | Share | Estimate | 95% CI | Storms |", "|---|---|---|---|---|"]
     for (days, share), row in off["recovery_sensitivity"].iterrows():
         lines.append(f"| {days} days | {share} | {row['est']:.3f} | {row['ci_lo']:.3f} to {row['ci_hi']:.3f} "

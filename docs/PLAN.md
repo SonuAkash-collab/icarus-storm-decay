@@ -76,7 +76,7 @@ synthetic data.
         checks of notebook 04 are still to rerun on the cohort.
   - [ ] Blur-free outcome for the extreme storms: total altitude lost from a calm day before
         to a calm day after (decision rule below).
-- [ ] **B3 object catalog** (`src/objects.py`, branch `B3-object-catalog`): one row per
+- [x] **B3 object catalog** (`src/objects.py`, branch `B3-object-catalog`): one row per
       object, columns in `schema.OBJECT_COLUMNS`, checked by `schema.validate_objects`.
   - [x] CelesTrak SATCAT (`fetch_satcat`, one JSON request per object, cached in
         `data/raw/satcat_records.json`): `object_type` (debris / rocket body / payload /
@@ -100,10 +100,9 @@ synthetic data.
         (n = 116, 0.82 for the 109 in 400-800 km). Next: join `objects.parquet` to the table.
   - [x] Tests (`tests/test_objects.py`, inline records, fake HTTP session); the two
         download tests skip offline / without `DISCOS_TOKEN`.
-  - [ ] Run locally on the cohort (CelesTrak and DISCOSweb were unreachable from the
-        build container): `build_objects` on the 265 cohort IDs, check DISCOSweb field
-        names against a real reply, then `compare_drag` on the B4-B5 fits.
-  - [ ] Notebook 06 (notebooks 05 are taken).
+  - [x] Run locally on the cohort (#25): `build_objects` on the 265 cohort IDs, DISCOSweb
+        field names checked, `compare_drag` on the B4-B5 fits.
+  - [x] Notebook 06 (#25).
 - [x] **B6 physics simulator** (`src/simulate.py`, branch `B6-physics-simulator`):
       synthetic orbits decaying through pymsis MSIS 2.1 density with a storm boost of
       known size, TLE-style noise that grows during storms, output validated with
@@ -148,6 +147,29 @@ synthetic data.
         50,674 intervals vs mean decay -50.6 m/day; per-object t SD 0.82, 6 of 250 with |t| > 2.
   - [x] Smoke test of `src.causal_run` (PRELIMINARY, see decision log). It now skips the
         offset ratio when the table has no active satellites (needs B3).
+- [x] **Active satellites in the table** (branch `B-actives-join`, `notebooks/07_actives.ipynb`):
+      `python -m src.active_cohort` then `python -m src.build_table` (appends them when the
+      active files exist; `--no-actives` for the passive table only).
+  - [x] `src/active_cohort.py` CLI: payload snapshots on the 9 sample dates (cached in
+        `data/raw/active_candidates/`), 25 Starlink + 25 other payloads selected separately
+        with `select_active_cohort`, TLE history, cleaning, intervals. 50 objects, 39,218
+        intervals; 26 active (25 Starlink + SURCAL 150B), 19,900 active intervals.
+  - [x] `build_objects` on cohort + actives -> `objects.parquet` (291 objects; maneuver search
+        now reads the active intervals too). Starlink A/m from DISCOSweb (v1.0 0.052, v1.5
+        0.036, v2 mini 0.046 m^2/kg).
+  - [x] Physics: same drivers (`data/processed/physics_chunks_actives/`), B = 2.2 x A/m x
+        fitted / catalog ratio of rocket bodies within +-50 km (`catalog_scale`, 0.71-0.77
+        at Starlink altitudes; `drag_source = "catalog_scaled"`). No Hampel filter for actives
+        (it would delete the burns). `Y_total`, `Y_residual`, `Y_residual_nrl` as for passives,
+        `Y_log_ratio` NaN. Per-object B and flags in `data/processed/active_drag.parquet`.
+  - [x] `free_drag` flag (`build_table.free_drag_flags`): rows in a 21-day window losing
+        > 1 km and >= 10% of the free-drag loss; left out of the offset ratio
+        (`offset_ratio._clean_actives`). 17 of 26 objects have flagged rows (7,065 of 19,900
+        rows); 5 fully excluded (SURCAL 150B + 4 Starlinks deorbiting all year).
+  - [x] `causal_run` reports instead of failing when no active has a twin
+        (`offset_ratio.match_diagnostics`, `offset_match_diagnostics.csv`).
+  - [ ] Offset ratio NOT estimable with the current passive pool (decision log, Oct 31):
+        needs passive twins near the Starlink shells or a twin-free counterfactual.
 
 ## C: Siddhant Anil (event study and offset ratio, `causal-event-offset`)
 
@@ -378,3 +400,23 @@ synthetic data.
   objects and 10,840 active intervals; no intervals crossed an onset or a >5-day gap.
   The reproducible entry point is `src/active_cohort.py`; raw TLEs and derived tables stay
   ignored under `data/`.
+- **Oct 31, actives in the table (Sonu)**: the active cohort was rebuilt with
+  `python -m src.active_cohort` (Piyush's files were not shared): 25 Starlink + 25 other
+  payloads, 26 active = 25 Starlink + SURCAL 150B, as in Piyush's run. SURCAL 150B (1967
+  calibration satellite) is a false-positive active: its 2 "maneuvers" sit on a steady
+  ~300 m/day decay, and the free-drag flag removes all its rows. So question 3 is a Starlink
+  study. Active drag sensitivity = catalog x the median fitted / catalog ratio of rocket
+  bodies within +-50 km (0.71-0.77), not a straight-line fit in altitude (one stage type at
+  600-650 km pulls that to ~0.5). Satellites that stop station keeping are flagged per row,
+  not per object (shell changes leave good periods), with a 10% lower bound on observed /
+  free-drag loss because deorbiting Starlinks decay at only 0.2-0.5 of the catalog rate.
+  **The offset ratio is not estimable with the current passive pool**: no passive object
+  lies near the Starlinks (0 at 440-570 km and 38-58 deg; nearest twin 1.03-1.34 SD vs the
+  0.5 caliper), and the neighbouring-storm rule leaves 3 of 20 storms (Jun 27, Nov 8, Dec 31
+  2024; May and Oct 2024 drop out). Forcing pairs with a 1.5 SD caliper gives SMD -1.8
+  (altitude) and -1.4 (inclination) and an offset ratio of -4.7 (95% CI -65 to 120): not a
+  result. Debris placebo (20 sets): ducking share mean -0.04 (SD 0.16), offset ratio mean
+  0.10 (SD 0.45). Passive results unchanged by the actives (`Y_total` days 0-2 -14.06,
+  `Y_residual` +0.15). Next: passive twins at 450-560 km and 40-56 deg (task A), or a
+  twin-free counterfactual (the active's own catalog-B physics prediction); both are
+  design changes for the team to decide.

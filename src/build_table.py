@@ -34,10 +34,22 @@ Steps:
    physics.add_total_effect), storm link (schema.link_storms), ap integral and F10.7,
    then schema.validate.
 
+6. Active satellites (question 3 only, never pooled with the passive rows): when
+   data/processed/orbit_intervals_actives.parquet exists (python -m src.active_cohort)
+   and objects.parquet covers them (objects.build_objects), their intervals go through
+   the same drivers (cached in data/processed/physics_chunks_actives/) with a catalog
+   drag sensitivity, B = 2.2 x A/m scaled by the fitted / catalog ratio of rocket
+   bodies at the same altitude (drag_source = "catalog_scaled", catalog_scale), and
+   are appended with is_active = 1. Station keeping spoils a quiet fit, and the Hampel
+   filter would delete the burns, so neither is used. free_drag_flags marks the rows
+   where a satellite keeps losing altitude for 3 weeks (failed, deorbiting or moving
+   to a lower shell): free_drag = 1, left out of the offset ratio.
+
 Extra columns beyond schema.py: cohort_group, climb_flag, hampel_outlier, role,
 drag_source, drag_unstable, drag_se, obs_decay / pred_decay (m/day, MSIS 2.1),
 alt_km_tle (Piyush's a - R_earth; alt_km is the mean geodetic altitude of the SGP4
-samples, as in physics.density_drivers).
+samples, as in physics.density_drivers); with actives also free_drag, first_flag,
+object_name, drag_scale (NaN / 0 for passive rows).
 """
 
 import argparse
@@ -63,6 +75,18 @@ N_BOOT = 500
 BOOT_BLOCK = "7D"               # resample whole calendar weeks of fit intervals
 MIN_FIT_INTERVALS = 30          # fewer quiet fit intervals than this -> unstable
 MAX_REL_SE = 0.25               # bootstrap SE / B above this -> unstable
+
+# Active satellites (src/active_cohort.py, src/objects.py)
+ACTIVE_INTERVALS_PATH = PROCESSED_DIR / "orbit_intervals_actives.parquet"
+ACTIVE_TLES_PATH = PROCESSED_DIR / "active_tles_cleaned.parquet"
+OBJECTS_PATH = PROCESSED_DIR / "objects.parquet"
+ACTIVE_CHUNK_DIR = PROCESSED_DIR / "physics_chunks_actives"
+ACTIVE_DRAG_NAME = "active_drag.parquet"   # per active object: B, scale, free-drag flag
+SCALE_WINDOW_KM = 50            # rocket bodies within +-50 km give the fitted / catalog ratio
+SCALE_MIN_BODIES = 5
+FREE_DRAG_DAYS = 21             # sustained decay this long -> not station keeping
+FREE_DRAG_RATIO = (0.1, 2.0)    # observed / free-drag loss: "drag" in this range, "lowering" above
+FREE_DRAG_MIN_LOSS_KM = 1.0     # and the window must lose at least this much altitude
 
 
 # ---------------------------------------------------------------------------
@@ -223,10 +247,11 @@ def holdout_gate(rates, model=MAIN_MODEL, groups=("main",)):
 # 5. The schema table
 # ---------------------------------------------------------------------------
 
-def assemble(rates, drag, sw, storms, tles):
-    """Schema-format table (validated) from cohort_physics output."""
+def assemble(rates, drag, sw, storms, tles, is_active=0):
+    """Schema-format table (validated) from cohort_physics output (or active_physics with
+    is_active=1: Y_log_ratio is then NaN, station keeping makes it meaningless)."""
     rates = rates.sort_values(["norad_id", "t_mid"]).reset_index(drop=True)
-    high = (rates["cohort_group"] == "high_altitude").to_numpy()
+    high = (rates["cohort_group"] == "high_altitude").to_numpy() | bool(is_active)
     # Endpoint check from the cleaned TLEs: Piyush's tle_ok also fails climbs, which we keep
     ok = tles.set_index(["norad_id", "epoch"])["tle_ok"]
     ok0 = ok.reindex(pd.MultiIndex.from_frame(rates[["norad_id", "t_start"]].rename(columns={"t_start": "epoch"})))
@@ -245,7 +270,7 @@ def assemble(rates, drag, sw, storms, tles):
         "day_of_year": rates["day_of_year"].to_numpy(),
         "ecc": rates["ecc"].to_numpy(),
         "tle_ok": (endpoints_ok & ~rates["hampel_outlier"].to_numpy()).astype("int64"),
-        "is_active": 0,
+        "is_active": int(is_active),
         "Y_residual": rates[f"resid_{MAIN_MODEL}"].to_numpy() * 1000,
         "Y_residual_nrl": rates["resid_nrlmsise00"].to_numpy() * 1000,
         "Y_log_ratio": np.where(high, np.nan, rates[f"log_ratio_{MAIN_MODEL}"].to_numpy()),
@@ -271,11 +296,15 @@ def assemble(rates, drag, sw, storms, tles):
     return validate(df)
 
 
-def build_table(drop_climbs=False, path=TABLE_PATH, inputs=None, chunk_dir=CHUNK_DIR, save=True, log=print):
+def build_table(drop_climbs=False, path=TABLE_PATH, inputs=None, chunk_dir=CHUNK_DIR, save=True, log=print,
+                actives=True, active_inputs=None, active_chunk_dir=ACTIVE_CHUNK_DIR):
     """Rebuild the analysis table end to end. Returns (table, drag, gate) where gate =
     holdout_gate(...) = (pooled, per_object). Saves to `path` when save=True.
 
     inputs: (intervals, tles, sw, storms) to skip load_inputs (tests pass small frames).
+    actives: append the active satellites (question 3, section 6). Their inputs are
+    read from disk only when inputs is None and the files exist; tests pass
+    active_inputs = (intervals, tles, objects) instead.
     """
     intervals, tles, sw, storms = load_inputs() if inputs is None else inputs
     intervals = intervals.rename(columns={"alt_km": "alt_km_tle"})
@@ -284,13 +313,180 @@ def build_table(drop_climbs=False, path=TABLE_PATH, inputs=None, chunk_dir=CHUNK
     rates, drag = cohort_physics(drivers, storms, drop_climbs=drop_climbs)
     gate = holdout_gate(rates)
     table = assemble(rates, drag, sw, storms, tles)
+    if actives and active_inputs is None and inputs is None and ACTIVE_INTERVALS_PATH.exists():
+        active_inputs = load_active_inputs()
+    if actives and active_inputs is not None:
+        a_iv, a_tles, objects = active_inputs
+        active, active_drag = active_table(a_iv, a_tles, objects, table, sw, storms,
+                                           chunk_dir=active_chunk_dir, log=log)
+        table = append_actives(table, active)
+        if save:
+            active_drag.to_parquet(Path(path).parent / ACTIVE_DRAG_NAME)
     if save:
         save_table(table, path)
     return table, drag, gate
 
 
 # ---------------------------------------------------------------------------
-# 6. Cohort summaries (notebooks/05)
+# 6. Active satellites (question 3, offset ratio only)
+# ---------------------------------------------------------------------------
+
+def load_active_inputs(intervals_path=ACTIVE_INTERVALS_PATH, tles_path=ACTIVE_TLES_PATH,
+                       objects_path=OBJECTS_PATH):
+    """(active intervals, their cleaned TLEs, objects table) from src/active_cohort.py and
+    src/objects.py. Only intervals of objects the objects table calls active are kept."""
+    from src.objects import load_objects
+    objects = load_objects(objects_path)
+    intervals = pd.read_parquet(intervals_path)
+    intervals = intervals[intervals["norad_id"].isin(objects.loc[objects["is_active"] == 1, "norad_id"])]
+    return intervals, pd.read_parquet(tles_path), objects
+
+
+def catalog_scale(passive_table, objects, alt_km, window_km=SCALE_WINDOW_KM, min_bodies=SCALE_MIN_BODIES):
+    """Fitted / catalog drag sensitivity of rocket bodies near each altitude in alt_km.
+
+    Rocket bodies of the main group with a stable quiet fit and a catalog A/m. For each
+    altitude: median of B_fit / B_catalog over the bodies within +-window_km (mean
+    altitude), the window widened in 25 km steps until it holds min_bodies.
+    A straight-line fit in altitude does not work: one stage type (39 bodies at
+    600-650 km, ratio ~0.5) pulls it far below the ~0.75 seen at 450-550 km.
+    Returns a frame indexed like alt_km with scale, n_bodies, window_km.
+    """
+    rows = passive_table[(passive_table["cohort_group"] == "main") & (passive_table["drag_source"] == "fit")
+                         & (passive_table["drag_unstable"] == 0)]
+    fit = rows.groupby("norad_id").agg(B=("drag_sensitivity", "first"), alt=("alt_km", "mean"))
+    cat = objects.set_index("norad_id")
+    fit = fit.join(cat[["object_type", "drag_sensitivity_catalog"]], how="inner")
+    fit = fit[(fit["object_type"] == "rocket body") & (fit["drag_sensitivity_catalog"] > 0)]
+    ratio = (fit["B"] / fit["drag_sensitivity_catalog"]).to_numpy()
+    alt = fit["alt"].to_numpy()
+    out = []
+    for a in np.atleast_1d(np.asarray(alt_km, dtype=float)):
+        w = window_km
+        while (np.abs(alt - a) <= w).sum() < min_bodies and w < 1000:
+            w += 25
+        near = np.abs(alt - a) <= w
+        out.append({"scale": np.median(ratio[near]) if near.any() else np.nan,
+                    "n_bodies": int(near.sum()), "window_km": w})
+    index = alt_km.index if isinstance(alt_km, pd.Series) else None
+    return pd.DataFrame(out, index=index)
+
+
+def free_drag_flags(rows, days=FREE_DRAG_DAYS, ratio=FREE_DRAG_RATIO, min_loss_km=FREE_DRAG_MIN_LOSS_KM):
+    """Where active satellites are not station keeping: failed (decaying with drag) or
+    being lowered (deorbit, shell change), for at least `days` days in a row.
+
+    rows: intervals with norad_id, t_start, t_end, dt_days, obs_decay and pred_decay
+    (m/day, pred = catalog-scaled B times the actual-ap driver).
+    Over each window of `days` days starting at an interval: observed altitude change
+    (sum obs * dt) vs the free-drag prediction (sum pred * dt). A station-keeping
+    satellite holds its altitude (observed / predicted ~0, |ratio| < 0.15 on the real
+    Starlinks, < 0.5 km lost per 3 weeks). A window is flagged if it loses more than
+    min_loss_km AND at least ratio[0] of the free-drag loss; "drag" up to ratio[1],
+    "lowering" above it. The lower bound is well below 1 because deorbiting Starlinks
+    decay at only ~0.2-0.5 of the catalog free-drag rate (low-drag attitude).
+    Storms last a few days and the operators climb back, so a storm alone does not
+    trigger it (tests/test_actives.py).
+
+    Returns (flags, per_object). flags: 0/1 per row of `rows` (same index), 1 inside a
+    flagged window; these rows are left out of the offset ratio, so a satellite that
+    resumes station keeping after a shell change keeps its good periods. A window that
+    is at least half free drag counts, so flags can start up to ~days / 2 early.
+    per_object: free_drag (1 = any flagged row), first_flag, flagged_days, flagged_share
+    and kind (most common window kind).
+    """
+    flags = pd.Series(0, index=rows.index, dtype="int64")
+    out = []
+    for norad_id, g in rows.sort_values("t_start").groupby("norad_id"):
+        t0 = g["t_start"].to_numpy()
+        t1 = g["t_end"].to_numpy()
+        obs = np.cumsum(np.r_[0, (g["obs_decay"] * g["dt_days"]).to_numpy()]) / 1000
+        pred = np.cumsum(np.r_[0, (g["pred_decay"] * g["dt_days"]).to_numpy()]) / 1000
+        span = pd.Timedelta(days=days).to_timedelta64()
+        flagged = np.zeros(len(g), dtype=bool)
+        kinds = []
+        for i in range(len(g)):
+            j = np.searchsorted(t1, t0[i] + span, side="left")
+            if j >= len(g):
+                break
+            d_obs, d_pred = obs[j + 1] - obs[i], pred[j + 1] - pred[i]
+            if d_obs > -min_loss_km or d_pred >= 0:
+                continue
+            r = d_obs / d_pred
+            if r >= ratio[0]:
+                flagged[i:j + 1] = True
+                kinds.append("drag" if r <= ratio[1] else "lowering")
+        flags.loc[g.index] = flagged.astype("int64")
+        dt = g["dt_days"].to_numpy()
+        out.append({"norad_id": norad_id, "free_drag": int(flagged.any()),
+                    "first_flag": pd.Timestamp(t0[flagged.argmax()]) if flagged.any() else pd.NaT,
+                    "flagged_days": float(dt[flagged].sum()), "flagged_share": float(dt[flagged].sum() / dt.sum()),
+                    "kind": (max(set(kinds), key=kinds.count) if kinds else None)})
+    per_object = pd.DataFrame(out, columns=["norad_id", "free_drag", "first_flag", "flagged_days",
+                                            "flagged_share", "kind"])
+    return flags, per_object
+
+
+def active_physics(drivers, objects, passive_table, storms):
+    """Predictions for active satellites with a catalog drag sensitivity.
+
+    B cannot be fitted from quiet decay (station keeping), so B = drag_sensitivity_catalog
+    (2.2 x A/m, DISCOSweb) x catalog_scale at the object's mean altitude: the fitted /
+    catalog ratio of rocket bodies at that altitude. The same B for both models.
+    No Hampel filter: it would remove the station-keeping burns, which are the signal.
+    Returns (rates, drag) like cohort_physics; drag has B, scale, n_bodies,
+    drag_source = "catalog_scaled", unstable = 0, se = NaN.
+    """
+    rates = physics.label_intervals(drivers.reset_index(drop=True), storms)
+    cat = objects.set_index("norad_id")["drag_sensitivity_catalog"]
+    alt = rates.groupby("norad_id")["alt_km"].mean()
+    drag = catalog_scale(passive_table, objects, alt)
+    drag["B_catalog"] = cat.reindex(drag.index)
+    drag["B"] = drag["B_catalog"] * drag["scale"]
+    if drag["B"].isna().any():
+        raise ValueError(f"No catalog A/m for active objects {drag.index[drag['B'].isna()].tolist()}")
+    drag["alt_km"] = alt
+    drag["drag_source"] = "catalog_scaled"
+    drag["unstable"] = 0
+    drag["se"] = np.nan
+    for model in physics.MODELS:
+        rates = physics.add_predictions(rates, model, drag["B"])
+    rates = physics.add_total_effect(rates, MAIN_MODEL)
+    rates["hampel_outlier"] = False
+    rates["climb_flag"] = 0
+    rates["cohort_group"] = "active"
+    return rates, drag
+
+
+def active_table(intervals, tles, objects, passive_table, sw, storms, chunk_dir=ACTIVE_CHUNK_DIR, log=print):
+    """Schema rows (is_active = 1) for the active satellites, with extra columns
+    object_name, drag_scale, free_drag (1 = row inside a window flagged by
+    free_drag_flags: left out of the offset ratio) and first_flag (per object). Returns (rows, drag): drag = one row per
+    object with B, B_catalog, scale, n_bodies, window_km and the free_drag_flags columns."""
+    intervals = intervals.rename(columns={"alt_km": "alt_km_tle"})
+    check_no_bridges(intervals, storms)
+    if "climb_flag" not in intervals:
+        intervals = intervals.assign(climb_flag=0)
+    drivers = cohort_drivers(tles, intervals, sw, storms, chunk_dir=chunk_dir, log=log)
+    rates, drag = active_physics(drivers, objects, passive_table, storms)
+    df = assemble(rates, drag, sw, storms, tles, is_active=1)
+    row_flags, flags = free_drag_flags(df)
+    flags = flags.set_index("norad_id")
+    names = objects.set_index("norad_id")["object_name"]
+    df["object_name"] = df["norad_id"].map(names).astype("string")
+    df["drag_scale"] = df["norad_id"].map(drag["scale"])
+    df["free_drag"] = row_flags
+    df["first_flag"] = df["norad_id"].map(flags["first_flag"])
+    return df, drag.join(flags)
+
+
+def append_actives(passive, active):
+    """Passive and active rows in one validated table (passives get free_drag = 0)."""
+    return validate(pd.concat([passive.assign(free_drag=0), active], ignore_index=True))
+
+
+# ---------------------------------------------------------------------------
+# 7. Cohort summaries (notebooks/05)
 # ---------------------------------------------------------------------------
 
 def _wmean(df, col):
@@ -326,14 +522,21 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--drivers-only", action="store_true", help="only run / resume the cached physics chunks")
     p.add_argument("--drop-climbs", action="store_true", help="check version without climb intervals")
+    p.add_argument("--no-actives", action="store_true", help="passive cohort only")
     p.add_argument("--out", default=str(TABLE_PATH))
     args = p.parse_args(argv)
     if args.drivers_only:
         intervals, tles, sw, storms = load_inputs()
         cohort_drivers(tles, intervals.rename(columns={"alt_km": "alt_km_tle"}), sw, storms)
         return
-    table, drag, (pooled, per) = build_table(drop_climbs=args.drop_climbs, path=args.out)
+    table, drag, (pooled, per) = build_table(drop_climbs=args.drop_climbs, path=args.out,
+                                             actives=not args.no_actives)
     print(f"{len(table):,} rows, {table['norad_id'].nunique()} objects -> {args.out}")
+    active = table[table["is_active"] == 1]
+    if len(active):
+        print(f"Active satellites: {active['norad_id'].nunique()} objects, {len(active):,} rows; "
+              f"free_drag rows (left out of the offset ratio): {int(active['free_drag'].sum()):,} "
+              f"in {active.loc[active['free_drag'] == 1, 'norad_id'].nunique()} objects")
     print("Held-out quiet residual (main cohort, m/day):")
     print(pooled.to_string())
     print(f"Per-object |t| > 2: {(per['t'].abs() > 2).sum()} of {len(per)}")

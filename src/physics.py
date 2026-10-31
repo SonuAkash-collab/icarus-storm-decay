@@ -523,7 +523,7 @@ def storm_baseline_residual(rates, storms, col, pre=QUIET_AP_DAYS, post=POST_DAY
                    "min_dst": s["min_dst"], "pre": _weighted_mean(a[col], a["dt_days"]),
                    "post": _weighted_mean(b[col], b["dt_days"]), "n_pre": len(a), "n_post": len(b),
                    # rough SE of the change from the interval scatter (a lower bound)
-                   "se": np.sqrt(a[col].var() / len(a) + b[col].var() / len(b))}
+                   "se": np.sqrt(a[col].var() / len(a) + b[col].var() / len(b)) if len(a) and len(b) else np.nan}
             if col.startswith("resid_"):
                 pred = col.replace("resid_", "pred_")
                 row["obs_over_pred"] = (_weighted_mean(b["da_dt_km_per_day"], b["dt_days"])
@@ -570,3 +570,306 @@ def post_storm_verdict(raw_all, raw_without, smooth_all, extremes):
             f"no over-prediction across the {int(raw_all['storms'])} storms (95% interval "
             f"{raw_all['ci_lo']:.1f} to {raw_all['ci_hi']:.1f}); seen only in the extreme storms, "
             f"where {int(survive.sum())} of {len(extremes)} storm-object pairs survive the strongest smoothing")
+
+
+# ---------------------------------------------------------------------------
+# 7. Extreme-storm check on the cohort: table rows as rates, onset gaps, calm-to-calm loss
+# ---------------------------------------------------------------------------
+
+QUIET_DAY_AP = 27            # calm UT day: every 3-hour ap of the day below this (Kp below 4)
+CALM_AFTER_MAX_DAYS = 7      # look this many days past recovery_end for the calm day after
+MIN_COVERAGE = 0.95          # share of the calm-to-calm span the intervals must cover
+CALM_BOOT = 2000             # bootstrap draws in calm_summary
+CALM_QUIET_DAYS = 30         # quiet-interval baseline of calm_to_calm: days -30..+30 of main_onset
+
+
+def table_rates(table):
+    """Analysis-table rows (m/day) as a `rates` frame (km/day) for the functions above.
+
+    Columns: norad_id, t_start, t_end (t_mid -+ dt/2 if the table has none), t_mid,
+    dt_days, da_dt_km_per_day and, for msis21 and nrlmsise00, pred_/resid_<model>,
+    B_<model> = 1 and driver_<model> = the prediction itself. The table stores no density
+    driver, but B is constant per object, so smoothing or shifting the prediction is the
+    same as smoothing the driver, and add_predictions on a smoothed driver refits a factor
+    ~1 on the 'fit' intervals (notebook 04 refits B the same way). role, alt_km and
+    hampel_outlier are kept when present.
+    """
+    t = table.sort_values(["norad_id", "t_mid"]).reset_index(drop=True)
+    half = pd.to_timedelta(t["dt_days"] / 2, unit="D")
+    obs = t["obs_decay"] / 1000
+    resid = {"msis21": t["Y_residual"] / 1000, "nrlmsise00": t["Y_residual_nrl"] / 1000}
+    out = pd.DataFrame({
+        "norad_id": t["norad_id"],
+        "t_start": t["t_start"] if "t_start" in t else t["t_mid"] - half,
+        "t_end": t["t_end"] if "t_end" in t else t["t_mid"] + half,
+        "t_mid": t["t_mid"], "dt_days": t["dt_days"], "da_dt_km_per_day": obs})
+    for model, r in resid.items():
+        out[f"pred_{model}"] = obs - r
+        out[f"resid_{model}"] = r
+        out[f"driver_{model}"] = out[f"pred_{model}"]
+        out[f"B_{model}"] = 1.0
+    for col in ("role", "alt_km", "hampel_outlier"):
+        if col in t:
+            out[col] = t[col]
+    if "hampel_outlier" in out:
+        out["hampel_outlier"] = out["hampel_outlier"].astype(bool)
+    return out
+
+
+def onset_gaps(rates, tol=pd.Timedelta(seconds=1)):
+    """Holes in each object's chain of intervals (t_end of one is not t_start of the next).
+
+    On the cohort these are the intervals task A4 left out because they bridge a
+    main_onset. The calm-to-calm loss must cover them, or the decay inside them would be
+    missing. Holes shorter than tol are rounding (t_start/t_end rebuilt from t_mid).
+    Returns norad_id, t_start, t_end of each hole.
+    """
+    r = rates.sort_values(["norad_id", "t_start"])
+    nxt = r.groupby("norad_id")["t_start"].shift(-1)
+    hole = nxt.notna() & (nxt - r["t_end"] > tol)
+    return pd.DataFrame({"norad_id": r.loc[hole, "norad_id"].to_numpy(),
+                         "t_start": r.loc[hole, "t_end"].to_numpy(),
+                         "t_end": nxt[hole].to_numpy()})
+
+
+def fill_onset_gaps(gaps, tles, sw, B, model="msis21", cache_path=None):
+    """Rates rows for the onset gaps: observed decay from the two TLEs at the ends,
+    prediction = B * density driver over the gap (density_drivers, cached).
+
+    These rows are only for the calm-to-calm loss (they bridge main_onset, so they never
+    enter the baseline-relative residual). B: drag sensitivity per norad_id (m^2/kg).
+    """
+    if cache_path is None:
+        cache_path = PROCESSED_DIR / "physics_onset_gaps.parquet"
+    a = tles.set_index(["norad_id", "epoch"])["a_km"]
+    g = gaps.copy()
+    a0 = a.reindex(pd.MultiIndex.from_frame(g[["norad_id", "t_start"]].rename(columns={"t_start": "epoch"})))
+    a1 = a.reindex(pd.MultiIndex.from_frame(g[["norad_id", "t_end"]].rename(columns={"t_end": "epoch"})))
+    g["da_km"] = a1.to_numpy() - a0.to_numpy()
+    g["dt_days"] = (g["t_end"] - g["t_start"]).dt.total_seconds() / 86400
+    g["t_mid"] = g["t_start"] + (g["t_end"] - g["t_start"]) / 2
+    g = g.dropna(subset=["da_km"]).reset_index(drop=True)
+    g = density_drivers(tles, g, sw, cache_path=cache_path)
+    g["da_dt_km_per_day"] = g["da_km"] / g["dt_days"]
+    g[f"pred_{model}"] = g["norad_id"].map(B) * g[f"driver_{model}"]
+    g[f"resid_{model}"] = g["da_dt_km_per_day"] - g[f"pred_{model}"]
+    g["onset_gap"] = True
+    return g.drop(columns=[c for c in g if c.startswith("rho_")])
+
+
+def calm_days(sw, quiet_ap_max=QUIET_DAY_AP):
+    """UT days on which every 3-hour ap stays below quiet_ap_max (index: day, value: bool)."""
+    ap = sw["ap"] if isinstance(sw.index, pd.DatetimeIndex) else sw.set_index("time")["ap"]
+    return ap.resample("D").max() < quiet_ap_max
+
+
+def calm_spans(storms, calm, pre=QUIET_AP_DAYS, max_after_days=CALM_AFTER_MAX_DAYS, extra_days=0):
+    """Per storm_id: candidate calm days before (latest first) and after (earliest first).
+
+    Before: days pre (-10..-3) of main_onset that end before the storm starts (earlier of
+    onset_time and main_onset) and start after the previous storm's recovery_end.
+    After: calm days from recovery_end + extra_days, at most max_after_days later, that
+    end before the next storm starts. Overlapping storms can leave either list empty.
+    """
+    s = storms.sort_values("main_onset").reset_index(drop=True)
+    begin = s[["onset_time", "main_onset"]].min(axis=1)
+    days = calm.index[calm.to_numpy()]
+    one = pd.Timedelta(days=1)
+    out = {}
+    for k, r in s.iterrows():
+        prev_end = s.loc[k - 1, "recovery_end"] if k > 0 else pd.Timestamp.min
+        next_begin = begin[k + 1] if k + 1 < len(s) else pd.Timestamp.max
+        d0 = r["main_onset"].normalize()
+        before = [d for d in days if d0 + pre[0] * one <= d <= d0 + pre[1] * one
+                  and d + one <= begin[k] and d >= prev_end][::-1]
+        lo = r["recovery_end"] + extra_days * one
+        after = [d for d in days if lo <= d <= lo + max_after_days * one and d + one <= next_begin]
+        out[r["storm_id"]] = (before, after)
+    return out
+
+
+def _epoch_on(epochs, days, pick):
+    """First day of `days` holding an epoch, and its last (pick=max) or first (min) epoch."""
+    one = np.timedelta64(1, "D")
+    for d in days:
+        on = epochs[(epochs >= np.datetime64(d)) & (epochs < np.datetime64(d) + one)]
+        if len(on):
+            return pick(on)
+    return None
+
+
+def calm_to_calm(rates, storms, sw, model="msis21", quiet_ap_max=QUIET_DAY_AP, pre=QUIET_AP_DAYS,
+                 max_after_days=CALM_AFTER_MAX_DAYS, extra_days=0, min_coverage=MIN_COVERAGE,
+                 quiet_days=CALM_QUIET_DAYS):
+    """Blur-free storm outcome: semi-major axis lost from a calm day before to a calm day after.
+
+    A TLE spreads the storm's decay over the following days, but it cannot change the
+    total: summed over a chain of intervals, da/dt * dt telescopes to a(end) - a(start).
+    So, per object and storm, from the object's last TLE epoch on the last calm day in
+    days -10..-3 (t0) to its first epoch on the first calm day after recovery_end (t1):
+        obs_m  = sum of observed da/dt * dt   (= a(t1) - a(t0), metres, < 0 = loss)
+        pred_m = sum of predicted da/dt * dt  (pred_<model>, same intervals)
+        diff_m = obs_m - pred_m               (> 0: less loss than the model predicts)
+        diff_adj_m = diff_m - span_days * pre_resid, where pre_resid (m/day) is the
+            object's dt-weighted mean residual over days -10..-3, after the previous
+            storm's recovery_end and before this storm starts (the baseline idea of
+            storm_baseline_residual, kept free of the previous storm)
+        diff_quiet_m = diff_m - span_days * quiet_resid, quiet_resid = the object's mean
+            residual over its quiet intervals (role fit / holdout) within quiet_days of
+            main_onset: a steadier baseline than the few days before the storm
+        obs_over_pred = obs_m / pred_m        (< 1: the model over-predicts the loss)
+    Calm day = every 3-hour ap below quiet_ap_max (calm_days, calm_spans). rates must hold
+    every interval of the chain, Hampel outliers and the onset gaps included
+    (fill_onset_gaps), since TLE noise cancels in the sum; pairs whose intervals cover less
+    than min_coverage of the span are dropped. extra_days pushes the calm day after later
+    (sensitivity: a TLE fitted on the first calm day still uses some storm-time tracking).
+    Returns one row per (storm, object); alt_km = dt-weighted mean over the span.
+    """
+    spans = calm_spans(storms, calm_days(sw, quiet_ap_max), pre, max_after_days, extra_days)
+    info = storms.set_index("storm_id")
+    begin = info[["onset_time", "main_onset"]].min(axis=1)
+    order = storms.sort_values("main_onset")
+    # previous storm's recovery_end (a year before the first storm for the first one)
+    first = order["main_onset"].min() - pd.Timedelta(days=365)
+    prev_end = pd.Series(order["recovery_end"].shift(1).fillna(first).to_numpy(), index=order["storm_id"])
+    rows = []
+    for norad_id, g in rates.sort_values("t_start").groupby("norad_id"):
+        ts, te = g["t_start"].to_numpy(), g["t_end"].to_numpy()
+        tm = g["t_mid"].to_numpy()
+        epochs = np.unique(np.concatenate([ts, te]))
+        dt = g["dt_days"].to_numpy()
+        obs_dt = (g["da_dt_km_per_day"] * g["dt_days"]).to_numpy()
+        pred_dt = (g[f"pred_{model}"] * g["dt_days"]).to_numpy()
+        resid = g[f"resid_{model}"].to_numpy()
+        alt = g["alt_km"].to_numpy() if "alt_km" in g else np.full(len(g), np.nan)
+        quiet = g["role"].isin(["fit", "holdout"]).to_numpy() if "role" in g else np.zeros(len(g), bool)
+        # rows allowed in the pre-storm baseline: not an onset gap, not a Hampel outlier
+        base = np.ones(len(g), bool)
+        for flag in ("onset_gap", "hampel_outlier"):
+            if flag in g:
+                base &= ~g[flag].astype(bool).to_numpy()
+        for sid, (before, after) in spans.items():
+            t0, t1 = _epoch_on(epochs, before, np.max), _epoch_on(epochs, after, np.min)
+            if t0 is None or t1 is None:
+                continue
+            # 1 s slack: t_start / t_end rebuilt from t_mid differ from the epochs by rounding
+            inside = (ts >= t0 - np.timedelta64(1, "s")) & (te <= t1 + np.timedelta64(1, "s"))
+            span = (t1 - t0) / np.timedelta64(1, "D")
+            coverage = dt[inside].sum() / span
+            if coverage < min_coverage:
+                continue
+            day = (tm - np.datetime64(info.loc[sid, "main_onset"])) / np.timedelta64(1, "D")
+            p = (base & (day >= pre[0]) & (day <= pre[1]) & (te <= np.datetime64(begin[sid]))
+                 & (ts >= np.datetime64(prev_end[sid])))
+            pre_resid = 1000 * np.sum(resid[p] * dt[p]) / dt[p].sum() if p.any() else np.nan
+            q = base & quiet & (np.abs(day) <= quiet_days)
+            quiet_resid = 1000 * np.sum(resid[q] * dt[q]) / dt[q].sum() if q.any() else np.nan
+            obs, pred = 1000 * obs_dt[inside].sum(), 1000 * pred_dt[inside].sum()
+            rows.append({"storm_id": sid, "norad_id": norad_id, "class": info.loc[sid, "class"],
+                         "min_dst": info["min_dst"].get(sid, np.nan) if "min_dst" in info else np.nan,
+                         "t0": pd.Timestamp(t0), "t1": pd.Timestamp(t1),
+                         "span_days": span, "coverage": coverage, "obs_m": obs, "pred_m": pred,
+                         "diff_m": obs - pred, "pre_resid_m_per_day": pre_resid,
+                         "diff_adj_m": obs - pred - span * pre_resid, "quiet_resid_m_per_day": quiet_resid,
+                         "diff_quiet_m": obs - pred - span * quiet_resid, "obs_over_pred": obs / pred,
+                         "alt_km": np.sum(alt[inside] * dt[inside]) / dt[inside].sum()})
+    return pd.DataFrame(rows)
+
+
+CALM_MEANS = {"diff": "diff_m", "adj": "diff_adj_m", "quiet": "diff_quiet_m"}   # summary name -> column
+
+
+def _calm_stats(obs, pred, means, storm, idx):
+    """[ratio = sum obs / sum pred] + each column of `means` averaged over objects, then
+    storms. storm: integer codes 0..k-1 (NaN values are left out of the means)."""
+    out = [obs[idx].sum() / pred[idx].sum()]
+    for v in means.values():
+        x, st = v[idx], storm[idx]
+        ok = np.isfinite(x)
+        n = np.bincount(st[ok], minlength=storm.max() + 1)
+        tot = np.bincount(st[ok], weights=x[ok], minlength=storm.max() + 1)
+        out.append(np.mean(tot[n > 0] / n[n > 0]) if (n > 0).any() else np.nan)
+    return out
+
+
+def calm_summary(per, by="class", n_boot=CALM_BOOT, seed=0):
+    """Observed / predicted loss and the difference per group of calm_to_calm rows.
+
+    ratio = sum of observed loss / sum of predicted loss; diff_m, diff_adj_m and
+    diff_quiet_m = mean over storms of the per-storm mean over objects (metres), with
+    95% bounds ratio_lo/hi, diff_lo/hi, adj_lo/hi, quiet_lo/hi. 95% intervals from a cluster
+    bootstrap: whole storms when the group has >= 3 storms (storm = cluster), otherwise
+    objects resampled within each storm (object = cluster; with one or two storms an
+    interval over storms means nothing). by: column name or list (e.g. "storm_id",
+    "alt_band", ["class", "alt_band"]).
+    """
+    rng = np.random.default_rng(seed)
+    by = [by] if isinstance(by, str) else list(by)
+    rows = []
+    for key, g in per.dropna(subset=["obs_m", "pred_m"]).groupby(by, observed=True):
+        g = g.reset_index(drop=True)
+        ids, storm = np.unique(g["storm_id"].to_numpy(), return_inverse=True)
+        obs, pred = g["obs_m"].to_numpy(), g["pred_m"].to_numpy()
+        means = {k: g[c].to_numpy(float) for k, c in CALM_MEANS.items() if c in g}
+        members = {s: np.flatnonzero(storm == s) for s in range(len(ids))}
+        if len(ids) >= 3:
+            basis = "storms"
+            draw = lambda: np.concatenate([members[s] for s in rng.choice(len(ids), len(ids))])   # noqa: E731
+        else:
+            basis = "objects"
+            draw = lambda: np.concatenate([rng.choice(m, len(m)) for m in members.values()])  # noqa: E731
+        point = _calm_stats(obs, pred, means, storm, np.arange(len(g)))
+        boot = np.array([_calm_stats(obs, pred, means, storm, draw()) for _ in range(n_boot)])
+        lo, hi = np.nanpercentile(boot, [2.5, 97.5], axis=0)
+        key = key if isinstance(key, tuple) else (key,)
+        row = {**dict(zip(by, key)), "obs_m": g["obs_m"].mean(), "pred_m": g["pred_m"].mean(),
+               "ratio": point[0], "ratio_lo": lo[0], "ratio_hi": hi[0]}
+        for j, k in enumerate(means, start=1):
+            row.update({CALM_MEANS[k]: point[j], f"{k}_lo": lo[j], f"{k}_hi": hi[j]})
+        rows.append({**row, "span_days": g["span_days"].mean(), "n_storms": len(ids),
+                     "n_objects": g["norad_id"].nunique(), "n_pairs": len(g), "ci_basis": basis})
+    return pd.DataFrame(rows)
+
+
+def per_storm_change(per_storm, value="change"):
+    """Mean over objects of a storm_baseline_residual column per storm, SE over objects
+    (object = cluster) and the 95% normal interval."""
+    g = per_storm.dropna(subset=[value]).groupby("storm_id")[value]
+    out = pd.DataFrame({"mean": g.mean(), "se": g.std() / np.sqrt(g.count()), "n_objects": g.count()})
+    out["ci_lo"], out["ci_hi"] = out["mean"] - 1.96 * out["se"], out["mean"] + 1.96 * out["se"]
+    return out
+
+
+def storm_check_label(raw, smooth, calm):
+    """Label one storm from three 95% intervals: raw and smooth = per_storm_change rows
+    (ci_lo) of the residual change with the raw and the most-smoothed prediction, calm =
+    calm_summary row (adj_lo) of the calm-to-calm loss.
+
+    PLAN.md rules: the over-prediction is a real model overshoot only if it survives the
+    smoothing AND shows in the calm-to-calm loss (observed loss smaller than predicted
+    relative to the object's own model error: diff_adj_m > 0 and, when present,
+    diff_quiet_m > 0); neither = TLE blur; one = mixed.
+    """
+    if not raw["ci_lo"] > 0:
+        return "no over-prediction"
+    # the calm-to-calm loss must be smaller than predicted under both baselines
+    smooth_ok = smooth["ci_lo"] > 0
+    calm_ok = calm["adj_lo"] > 0 and calm.get("quiet_lo", np.inf) > 0
+    if smooth_ok and calm_ok:
+        return "real model overshoot"
+    if not smooth_ok and not calm_ok:
+        return "TLE blur"
+    return "mixed: " + ("survives smoothing, not in calm-to-calm" if smooth_ok
+                        else "in calm-to-calm, gone after smoothing")
+
+
+def extreme_storm_verdict(labels):
+    """Overall verdict from storm_check_label of the extreme storms, {name: label}
+    (May and Oct 2024): "real model overshoot in extreme storms", "TLE blur", or
+    "mixed (...)" naming each storm's label."""
+    vals = set(labels.values())
+    if vals == {"real model overshoot"}:
+        return "real model overshoot in extreme storms"
+    if vals <= {"TLE blur", "no over-prediction"}:
+        return "TLE blur"
+    return "mixed (" + "; ".join(f"{k}: {v.removeprefix('mixed: ')}" for k, v in labels.items()) + ")"

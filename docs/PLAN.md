@@ -72,11 +72,16 @@ synthetic data.
   - [x] Report both, with and without the May 2024 and Oct 2024 storms.
   - [x] Save (a) as its own column `Y_total` (m/day): optional column in `schema.py`
     (`OPTIONAL_COLUMNS`), built by `physics.quiet_ap_drivers` + `physics.add_total_effect`.
-  - [ ] Rerun notebook 04 on the full cohort (with B4-B5 at scale). Notebook 05 covers the
-        holdout check, May/Oct residuals and the event-day profile; the smoothing / lag
-        checks of notebook 04 are still to rerun on the cohort.
-  - [ ] Blur-free outcome for the extreme storms: total altitude lost from a calm day before
-        to a calm day after (decision rule below).
+  - [x] Rerun notebook 04 on the full cohort (branch `B-extreme-storm-check`,
+        `src/extreme_check.py`, `notebooks/09_extreme_storm_check.ipynb`): 250 passive objects,
+        20 storms, both models, smoothing 1-3 days, lag. No general post-storm over-prediction
+        (MSIS 2.1 +0.8 m/day, CI -5.8 to 7.4); best lag -3 h (negligible). May 2024 does not
+        vanish with 3-day smoothing on the cohort (+14.8 -> +6.9 m/day), Oct 2024 +34.6 -> +28.4.
+  - [x] Blur-free outcome for the extreme storms (`physics.calm_to_calm`): altitude lost from
+        the last calm day in days -10..-3 to the first calm day after recovery_end, observed vs
+        MSIS 2.1, onset gaps refilled (`physics.fill_onset_gaps`). Oct 2024 obs/pred 0.86 (real
+        overshoot, all altitude bands); May 2024 0.91 raw but ~0 m against the model's local
+        quiet error (timing, not total); Dec 2024 1.19 (under-prediction). Review fig 8.
 - [x] **B3 object catalog** (`src/objects.py`, branch `B3-object-catalog`): one row per
       object, columns in `schema.OBJECT_COLUMNS`, checked by `schema.validate_objects`.
   - [x] CelesTrak SATCAT (`fetch_satcat`, one JSON request per object, cached in
@@ -449,3 +454,15 @@ synthetic data.
   10.3, drifting baselines of deorbiting satellites): compatible with 0 but weak; with catalog B
   ducking 0.65 (0.13 to 1.15), which shows that a wrong B scale fakes an offset. Caveats: one
   operator, catalog B, overlapping windows (storm 3's recovery window holds May 10), weak placebo.
+- **Oct 31, extreme-storm check (Sonu)**: verdict **mixed**. Rules: an over-prediction is a real
+  model overshoot only if the days 0..+3 change survives 3-day smoothing (95% CI over objects
+  above 0) AND the calm-to-calm loss is smaller than predicted against both baselines (the
+  object's pre-storm error, days -10..-3 after the previous storm's recovery, and its mean error
+  on quiet intervals within +-30 days). Oct 2024 passes both (+28.4 m/day smoothed; +137 / +169 m,
+  obs/pred 0.86). May 2024 survives smoothing (+6.9) but not calm-to-calm (-75 / -1 m): MSIS was
+  already over-predicting before the storm (+11.6 m/day) and the running error gives part of the
+  day 0..4 excess back after day 6, so it is timing. Dec 2024 is under-predicted (obs/pred 1.19).
+  Calm day = every 3-h ap < 27; 13 of 20 storms have a calm day before and after (the March-April
+  2025 run does not). Pushing the calm day after 2-3 days later changes nothing (the simulator
+  shows this removes a 2-day blur). Note: Oct 2024 is "severe" in the catalog, not "extreme".
+  Headline stays: no general model error; extreme-storm error is storm-specific.

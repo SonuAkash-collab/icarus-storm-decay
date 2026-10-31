@@ -1,4 +1,4 @@
-"""Plotting helpers (sanity check, space weather, physics-model comparison)."""
+"""Plotting helpers (sanity check, space weather, physics-model comparison, cohort physics)."""
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -215,6 +215,104 @@ def plot_storm_changes(per_storm, title, out_path=None):
     ax.set_xticks(range(len(order)), [f"{s}\n{d:.0f}" for s, d in zip(order, dst)], fontsize=8)
     ax.set_xlabel("storm id / min Dst (nT)")
     ax.set_ylabel("days 0..+3 minus days -10..-3\n(m/day, > 0 = over-prediction)")
+    ax.set_title(title, loc="left", fontsize=12)
+    ax.legend(frameon=False, fontsize=9)
+    _clean_axes(ax)
+    fig.tight_layout()
+    if out_path is not None:
+        fig.savefig(out_path, dpi=150)
+    return fig
+
+
+def plot_drag_sensitivity(drag, alt_km, out_path=None):
+    """Quiet-time drag sensitivity per object: histogram (log scale) and B against
+    altitude with the bootstrap 95% interval; unstable objects in red.
+
+    drag: build_table.drag_bootstrap output (fit objects only); alt_km: Series of mean
+    altitude by norad_id.
+    """
+    import numpy as np
+
+    d = drag.join(alt_km.rename("alt_km"))
+    bad = d["unstable"] == 1
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+    ax1.hist(np.log10(d["B"]), bins=30, color=DATA_COLOR, alpha=0.8)
+    ax1.set_xlabel("log10 drag sensitivity B (m^2/kg)")
+    ax1.set_ylabel("objects")
+    for mask, color, label in ((~bad, DATA_COLOR, "stable"), (bad, EVENT_COLOR, "unstable")):
+        x = d[mask]
+        ax2.errorbar(x["alt_km"], x["B"], yerr=[x["B"] - x["ci_lo"].clip(lower=1e-6), x["ci_hi"] - x["B"]],
+                     fmt="o", ms=3, lw=0.6, color=color, label=f"{label} ({mask.sum()})")
+    ax2.set_yscale("log")
+    ax2.set_xlabel("mean altitude (km)")
+    ax2.set_ylabel("B with 95% bootstrap interval")
+    ax2.legend(frameon=False, fontsize=9)
+    for ax in (ax1, ax2):
+        _clean_axes(ax)
+    fig.tight_layout()
+    if out_path is not None:
+        fig.savefig(out_path, dpi=150)
+    return fig
+
+
+def plot_holdout_t(per_object, title, out_path=None):
+    """Histogram of per-object held-out t values against the standard normal curve."""
+    import numpy as np
+
+    t = per_object["t"].dropna()
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.hist(t, bins=np.arange(-5, 5.25, 0.5), density=True, color=DATA_COLOR, alpha=0.7,
+            label=f"{len(t)} objects")
+    x = np.linspace(-5, 5, 200)
+    ax.plot(x, np.exp(-x**2 / 2) / np.sqrt(2 * np.pi), color=WEATHER_COLOR, lw=1.2, label="N(0, 1)")
+    ax.set_xlabel("held-out quiet residual / weekly-block SE")
+    ax.set_ylabel("density")
+    ax.set_title(title, loc="left", fontsize=12)
+    ax.legend(frameon=False, fontsize=9)
+    _clean_axes(ax)
+    fig.tight_layout()
+    if out_path is not None:
+        fig.savefig(out_path, dpi=150)
+    return fig
+
+
+def plot_storm_residual_vs_alt(windows, title, out_path=None):
+    """Days 0..+3 residual per object against altitude for some storms.
+
+    windows: {label: build_table.storm_window_residual frame}; one panel per outcome
+    (Y_residual = model error, Y_total = total storm effect).
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharey=True)
+    for ax, col, name in zip(axes, ["Y_residual", "Y_total"],
+                             ["model error (Y_residual)", "total storm effect (Y_total)"]):
+        for (label, w), color in zip(windows.items(), [DATA_COLOR, EVENT_COLOR, WEATHER_COLOR]):
+            ax.plot(w["alt_km"], w[col], "o", ms=3, alpha=0.7, color=color, label=f"{label} ({len(w)})")
+        ax.axhline(0, color=WEATHER_COLOR, lw=0.8)
+        ax.set_xlabel("mean altitude (km)")
+        ax.set_title(name, loc="left", fontsize=11)
+        _clean_axes(ax)
+    axes[0].set_ylabel("days 0..+3 mean (m/day)")
+    axes[0].legend(frameon=False, fontsize=9)
+    fig.suptitle(title, x=0.01, ha="left", fontsize=12)
+    fig.tight_layout()
+    if out_path is not None:
+        fig.savefig(out_path, dpi=150)
+    return fig
+
+
+def plot_event_day_profile(profiles, title, ylabel, out_path=None):
+    """Mean outcome by event day with +/- 1.96 SE bands (SE across storms).
+
+    profiles: {label: build_table.event_day_profile frame}.
+    """
+    fig, ax = plt.subplots(figsize=(10, 4))
+    for (label, p), color in zip(profiles.items(), [DATA_COLOR, EVENT_COLOR, WEATHER_COLOR]):
+        ax.plot(p.index, p["mean"], marker="o", ms=3, lw=1, color=color, label=label)
+        ax.fill_between(p.index, p["mean"] - 1.96 * p["se"], p["mean"] + 1.96 * p["se"], color=color, alpha=0.12, lw=0)
+    ax.axhline(0, color=WEATHER_COLOR, lw=0.8)
+    ax.axvline(0, color=EVENT_COLOR, lw=0.8, ls="--")
+    ax.set_xlabel("days from main_onset")
+    ax.set_ylabel(ylabel)
     ax.set_title(title, loc="left", fontsize=12)
     ax.legend(frameon=False, fontsize=9)
     _clean_axes(ax)

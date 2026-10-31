@@ -19,7 +19,10 @@ Columns (who builds them: A = orbit data, B = space weather + physics):
                          main analysis keeps only ecc < MAX_ECC (0.01)
     tle_ok            A  1 if both TLEs of the interval passed A3 cleaning (no
                          cross-tag inclination/RAAN jump, not a rolling-median
-                         outlier, no climb of a passive object), else 0. Rows with
+                         outlier) and B's Hampel filter on the residual kept it,
+                         else 0. Climbs of a passive object are NOT failed: dropping
+                         only upward noise biases decay (src/build_table.py keeps
+                         them, with climb_flag as an extra column). Rows with
                          0 stay in the table so the share removed can be reported
     is_active         B  0 = passive (debris, rocket body, dead satellite), 1 = active
     Y_residual        B  observed minus predicted da/dt (m/day) with MSIS 2.1. Negative =

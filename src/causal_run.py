@@ -17,7 +17,8 @@ checks, whichever the table has:
 Each comes with and without the May / Oct 2024 storms and with the (-3, 10)
 contamination rule. The offset ratio measures the storm loss on Y_total; without it,
 it falls back to Y_residual and says so in the summary, because on real data MSIS
-follows most of the storm and that loss can be near zero.
+follows most of the storm and that loss can be near zero. A table without active
+satellites (the passive cohort before B3) skips the offset ratio and says so.
 
 The high-altitude group (schema.high_alt_sample) gets its own event study as a
 negative control: its short-run effect should be about zero.
@@ -80,7 +81,9 @@ def run(table, storms, out_dir=OUT_DIR, outcomes=None, n_placebo=500, n_boot=999
     for outcome in outcomes:
         out["event_study"][outcome] = ec.run_all(table, storms, outcome, n_placebo, n_boot, seed)
         out["high_alt"][outcome] = high_alt_control(table, storms, outcome, n_boot, seed)
-    out["offset"] = offset_part(table, storms, n_boot, n_placebo_reps, seed)
+    # The offset ratio needs active satellites (question 3); skip it without them
+    has_actives = bool((table["is_active"] == 1).any())
+    out["offset"] = offset_part(table, storms, n_boot, n_placebo_reps, seed) if has_actives else None
     write(out, Path(out_dir))
     return out
 
@@ -97,6 +100,9 @@ def write(out, out_dir):
         r["with_without"].to_csv(d / "with_without.csv")
         r["contam_sensitivity"].to_csv(d / "contam_sensitivity.csv")
     off = out["offset"]
+    if off is None:
+        (out_dir / "summary.md").write_text(summary_text(out))
+        return
     off["summary"].to_csv(out_dir / "offset_ratio.csv")
     off["pairs"].to_csv(out_dir / "offset_pairs.csv", index=False)
     off["recovery_sensitivity"].to_csv(out_dir / "offset_recovery_sensitivity.csv")
@@ -132,6 +138,9 @@ def summary_text(out):
             f"{_fmt(high)}, {int(high['objects'])} objects, {int(high['storms_used'])} storms."
             if high is not None else "not run (no usable high-altitude rows)."))
     off = out["offset"]
+    if off is None:
+        lines += ["", "## Offset ratio", "", "Not run: the table has no active satellites."]
+        return "\n".join(lines) + "\n"
     s = off["summary"]
     lines += ["", f"## Offset ratio (storm loss on {off['outcome']})", ""]
     if off["outcome"] != OFFSET_OUTCOME:

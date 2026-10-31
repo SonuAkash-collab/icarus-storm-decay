@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import spacetrack.operators as op
 from dotenv import load_dotenv
@@ -97,6 +98,7 @@ def select_passive_cohort(
     max_ecc=0.01,
     min_snapshots=8,
     target_size=300,
+    altitude_band_km=100,
 ):
     """Rank a sampled set of Space-Track candidate snapshots into a cohort manifest.
 
@@ -104,13 +106,14 @@ def select_passive_cohort(
     ``find_candidates``. A candidate must be a debris object or rocket body, stay
     inside the requested perigee/apogee and eccentricity bounds on every sampled
     date where it appears, and appear on at least ``min_snapshots`` dates.
-    Candidates are ranked by number of qualifying snapshots, then NORAD ID; the
-    first ``target_size`` are marked selected. The returned manifest includes all
-    candidate rows so the selection and coverage can be reviewed before downloading
-    their full TLE histories.
+    Candidates are ranked by coverage within fixed altitude bands, then NORAD ID.
+    Selection is allocated as evenly as possible across the bands so a low NORAD ID
+    run cannot concentrate the scientific cohort at one altitude. The returned
+    manifest includes all candidate rows so the selection and coverage can be
+    reviewed before downloading their full TLE histories.
     """
-    if min_snapshots < 1 or target_size < 1:
-        raise ValueError("min_snapshots and target_size must be positive")
+    if min_snapshots < 1 or target_size < 1 or altitude_band_km <= 0:
+        raise ValueError("min_snapshots, target_size and altitude_band_km must be positive")
     passive_types = {"DEBRIS", "ROCKET BODY"}
     rows = []
     for sample_date, records in records_by_date.items():
@@ -137,7 +140,8 @@ def select_passive_cohort(
             })
 
     columns = ["norad_id", "object_type", "snapshots", "coverage_fraction",
-               "ecc_median", "perigee_median_km", "apogee_median_km", "selected"]
+               "ecc_median", "perigee_median_km", "apogee_median_km", "altitude_band",
+               "selection_rank", "selected"]
     if not rows:
         return pd.DataFrame(columns=columns), pd.DataFrame([
             {"step": "sample dates queried", "count": len(records_by_date)},
@@ -155,9 +159,36 @@ def select_passive_cohort(
                      apogee_median_km=("apogee_km", "median")))
     manifest["coverage_fraction"] = manifest["snapshots"] / n_dates
     manifest = manifest[manifest["snapshots"] >= min_snapshots]
-    manifest = manifest.sort_values(["snapshots", "norad_id"], ascending=[False, True]).reset_index(drop=True)
+    midpoint = (manifest["perigee_median_km"] + manifest["apogee_median_km"]) / 2
+    edges = np.arange(min_perigee, max_apogee + altitude_band_km, altitude_band_km)
+    if edges[-1] < max_apogee:
+        edges = np.append(edges, max_apogee)
+    manifest["altitude_band"] = pd.cut(midpoint, bins=edges, right=False,
+                                        include_lowest=True).astype("string")
+    manifest = manifest.dropna(subset=["altitude_band"])
+    manifest = manifest.sort_values(["altitude_band", "snapshots", "norad_id"],
+                                    ascending=[True, False, True]).reset_index(drop=True)
     manifest["selected"] = False
-    manifest.loc[:target_size - 1, "selected"] = True
+    available_bands = manifest["altitude_band"].drop_duplicates().tolist()
+    base, remainder = divmod(target_size, len(available_bands))
+    selected_indices = []
+    for number, band in enumerate(available_bands):
+        quota = base + int(number < remainder)
+        selected_indices.extend(manifest.index[manifest["altitude_band"] == band][:quota])
+    if len(selected_indices) < target_size:
+        remaining = manifest.drop(index=selected_indices)
+        selected_indices.extend(remaining.sort_values(["snapshots", "norad_id"],
+                                                       ascending=[False, True]).index[
+            :target_size - len(selected_indices)
+        ])
+    manifest.loc[selected_indices, "selected"] = True
+    manifest["selection_rank"] = pd.Series(pd.NA, index=manifest.index, dtype="Int64")
+    ranked = manifest.loc[manifest["selected"]].sort_values(
+        ["altitude_band", "snapshots", "norad_id"], ascending=[True, False, True]
+    )
+    manifest.loc[ranked.index, "selection_rank"] = range(1, len(ranked) + 1)
+    manifest = manifest.sort_values(["selected", "altitude_band", "snapshots", "norad_id"],
+                                    ascending=[False, True, False, True]).reset_index(drop=True)
     manifest = manifest[columns]
     report = pd.DataFrame([
         {"step": "sample dates queried", "count": len(records_by_date)},

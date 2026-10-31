@@ -33,12 +33,19 @@ synthetic data.
 | #13 | Curved UV error fades above 800 km |
 | #14-#16 | Double ML, curved-world result, ap lag sweep |
 | #17 | `src/causal_run.py`: every track C result on one table |
+| #18 | A2-A4: passive cohort, TLE cleaning, decay intervals (`orbit_intervals_a2_a4.parquet`) |
+| #19 | Residual validation: outlier filter, `Y_total`, TLE-blur check, notebook 04 |
+| B6 | Physics simulator (`src/simulate.py`) with a known storm boost (PR pending) |
+| B4-B5 | Cohort physics and the real analysis table (`src/build_table.py`, notebook 05; PR pending) |
 
 ## A: Piyush (orbit data)
 
-- [ ] **A2-A4 cohort and cleaning**: 400-800 km passive cohort, TLE cleaning, intervals
-      that never bridge a `main_onset`. Most likely bottleneck for real data.
-- [ ] **High-altitude control group**: 10-20 near-circular (ecc < 0.01) passive objects
+- [x] **A2-A4 cohort and cleaning** (#18, follow-up fixes #20): 400-800 km passive cohort, TLE cleaning, intervals
+      that never bridge a `main_onset`. First download (#18): 250 objects, 188,560 intervals; checked locally
+      Oct 30: no nulls, no duplicate keys, 0 intervals bridge a `main_onset`, all ecc < 0.01.
+      The cleaning flagged 0 inclination / RAAN jumps and 0 rolling-median outliers;
+      B's Hampel filter on the residual (`physics.remove_outliers`) is the outlier step.
+- [x] **High-altitude control group** (#18, 15 objects, 1,040-1,211 km): 10-20 near-circular (ecc < 0.01) passive objects
       at 1,000-1,500 km (old rocket bodies, debris), kept as a separate group. Not
       LAGEOS itself (~5,900 km).
 - [ ] **A7 precise-orbit check** (required): compare TLE-based decay with Swarm /
@@ -64,7 +71,9 @@ synthetic data.
   - [x] Report both, with and without the May 2024 and Oct 2024 storms.
   - [x] Save (a) as its own column `Y_total` (m/day): optional column in `schema.py`
     (`OPTIONAL_COLUMNS`), built by `physics.quiet_ap_drivers` + `physics.add_total_effect`.
-  - [ ] Rerun notebook 04 on the full cohort (with B4-B5 at scale).
+  - [ ] Rerun notebook 04 on the full cohort (with B4-B5 at scale). Notebook 05 covers the
+        holdout check, May/Oct residuals and the event-day profile; the smoothing / lag
+        checks of notebook 04 are still to rerun on the cohort.
   - [ ] Blur-free outcome for the extreme storms: total altitude lost from a calm day before
         to a calm day after (decision rule below).
 - [ ] **B3 object catalog** (`src/objects.py`, branch `B3-object-catalog`): one row per
@@ -89,17 +98,51 @@ synthetic data.
   - [ ] Run locally on the cohort (CelesTrak and DISCOSweb were unreachable from the
         build container): `build_objects` on the 265 cohort IDs, check DISCOSweb field
         names against a real reply, then `compare_drag` on the B4-B5 fits.
-  - [ ] Notebook 05.
-- [ ] **B6 physics simulator** (`src/simulate.py`, branch `B6-simulator`): synthetic
-      orbits decaying through pymsis MSIS 2.1 density with a storm boost of known size,
-      TLE-style noise that grows during storms, output validated with
-      `schema.validate`. Include a few objects above 1,000 km. Test: the physics
-      residual pipeline recovers the planted boost.
-- [ ] **B4-B5 at scale** (after A2 is merged): re-run `physics.py` for the whole
-      cohort. Where the quiet-time fit of drag sensitivity is unusable (high-altitude
-      group: predicted decay ~0, so observed / driver blows up), fall back to
-      `drag_sensitivity_catalog` from B3, mark it in an extra column
-      `drag_source` = "fit" / "catalog", and leave `Y_log_ratio` NaN.
+  - [ ] Notebook 06 (notebooks 05 are taken).
+- [x] **B6 physics simulator** (`src/simulate.py`, branch `B6-physics-simulator`):
+      synthetic orbits decaying through pymsis MSIS 2.1 density with a storm boost of
+      known size, TLE-style noise that grows during storms, output validated with
+      `schema.validate`. Done:
+  - [x] Space weather: real hourly frame + storm catalog if passed, otherwise synthetic
+        hourly ap / f107 / f107_81d with storms planted at given dates (default one
+        every 25 days).
+  - [x] Objects: passive, near-circular, 400-800 km, random true B; `n_high_alt`
+        objects at 1,000-1,500 km (default 3) with catalog B, `drag_source` =
+        "catalog" and `Y_log_ratio` NaN.
+  - [x] Truth: da/dt = -B rho (1 + boost(event_day)) sqrt(mu a), rho from MSIS 2.1 on
+        a circular-orbit track every 20 min, inputs passed explicitly (no download).
+        Default boost 0.5 on days 0..2, gone by day 5; negative boost allowed.
+  - [x] Fake TLEs: irregular epochs (~1/day, ~2/day in storms, one at each
+        main_onset), a noise 20 m quiet and 3x in storms, optional trailing 1-3 day
+        smoothing (`smooth_days`).
+  - [x] Pipeline: `orbit.decay_rates` -> driver (same samples, density and formula as
+        `physics.density_drivers`) -> `physics.label_intervals` -> quiet fit of B ->
+        `physics.add_predictions`; extra columns `true_effect`, `true_decay`,
+        `obs_decay`, `true_drag_sensitivity`, `drag_source`, `role`.
+  - [x] Tests (`tests/test_simulate.py`, ~25 s): no noise -> prediction follows the
+        truth (median error < 1%); boost 0 -> residual ~0; held-out quiet residual ~0;
+        planted boost (days 0..2) inside the event-study 95% interval; noise larger
+        in storms; negative boost; smoothing delays the storm; schema columns.
+- [x] **B4-B5 at scale** (branch `B4-B5-cohort-physics`, `src/build_table.py`,
+      `notebooks/05_cohort_physics.ipynb`): `python -m src.build_table` rebuilds
+      `data/processed/analysis_table.parquet` (199,580 rows, 265 objects, validated).
+  - [x] Drivers for NRLMSISE-00, MSIS 2.1 and MSIS 2.1 with quiet ap, cached in chunks of
+        10 objects (`data/processed/physics_chunks/`, resumes after a crash). Benchmark:
+        3,870 intervals in ~50 s; the cohort took ~37 min.
+  - [x] Climb intervals kept (2.2% of main intervals, `climb_flag` column); Hampel filter on
+        the MSIS 2.1 residual sets `tle_ok = 0` (5.5%, incl. 64.5% of the climbs).
+        Check without climbs: B changes by 0.4% (median), short-run effect -14.6 vs -14.1 m/day.
+  - [x] Drag sensitivity: ratio of sums on clean quiet fit intervals, 500-draw block
+        bootstrap by week (`drag_se`). Positive and stable for all 250 passive objects
+        (SE / B median 3%, max 8%). Unstable rule below.
+  - [x] High-altitude group: `Y_log_ratio` NaN. Their quiet fit is tight on real data
+        (SE / B ~4%, held-out residual 0.03 m/day, t = 0.4), so they keep it
+        (`drag_source = "fit"`); an unstable one falls back to the main-cohort median B
+        (`"cohort_median"`) until the B3 catalog exists.
+  - [x] Gate passed: held-out quiet residual -0.13 m/day (weekly-block SE 1.07) pooled over
+        50,674 intervals vs mean decay -50.6 m/day; per-object t SD 0.82, 6 of 250 with |t| > 2.
+  - [x] Smoke test of `src.causal_run` (PRELIMINARY, see decision log). It now skips the
+        offset ratio when the table has no active satellites (needs B3).
 
 ## C: Siddhant Anil (event study and offset ratio, `causal-event-offset`)
 
@@ -188,9 +231,26 @@ synthetic data.
 - Storm windows overlap: drop the contaminated windows, or use only clean controls in
   the stacked event study.
 - Held-out quiet residual isn't ~0: stop and fix drag sensitivity first.
+- Drag sensitivity is unstable (fixed before the cohort run, `build_table.drag_bootstrap`)
+  if the object has fewer than 30 quiet fit intervals, its weekly block-bootstrap SE is
+  more than 25% of B, or its bootstrap 95% interval reaches zero. Unstable objects are
+  flagged (`drag_unstable = 1`), not dropped; a high-altitude object that is unstable
+  gets the main-cohort median B.
 
 ## Decision log
 
+- **Oct 30, B4-B5 cohort physics (Sonu)**: climb intervals are kept (dropping only upward
+  noise would make decay look too fast); Piyush's `tle_ok` failed them, so the table's
+  `tle_ok` is the TLE endpoint check plus the Hampel filter, and `climb_flag` is kept for
+  the with/without check. High-altitude objects keep their quiet fit (tight on real data,
+  unlike the simulator) rather than a placeholder B: a cohort-median B is ~6x too large for
+  most of them and would fake a storm effect in the negative control. Smoke-test numbers
+  (PRELIMINARY, 12 clean storms): total storm effect `Y_total` days 0-2 -14.1 m/day
+  (95% CI -19.8 to -8.4, placebo p < 0.002, pre-trend p = 0.41), -13.8 without May/Oct
+  (`key_storm_ids` also drops the moderate May 2 storm), -10.1 with the (-3, 10) rule;
+  model error `Y_residual` +0.2 (CI -3.2 to 3.2, placebo p = 0.88); high-altitude control
+  `Y_total` -0.7 (CI -1.4 to 0.1). May/Oct 2024: MSIS 2.1 over-predicts days 0..+3 for
+  almost every object (median +12 / +15 m/day), consistent with notebook 04.
 - **Oct 30, B3 object catalog (Sonu)**: payloads (and unknown types) count as passive only
   if their decay intervals were searched and no maneuver was found; with no intervals they
   count as active, so nothing unchecked enters the passive sample. A maneuver = median a
@@ -203,11 +263,24 @@ synthetic data.
   cross-section; compared with the fitted B by rank (Spearman) only.
 - **Oct 30, A2-A4 orbit pipeline (Piyush)**: selected 250 passive 400-800 km objects
   with coverage on at least 8 of 9 Space-Track snapshots, plus 15 separate 1,000-1,500
-  km high-altitude controls. The Apr 2024-Apr 2025 download yielded 205,145 deduplicated
-  TLEs and 199,580 adjacent intervals; 5,300 onset-bridging intervals were omitted and
-  4,705 passive-climb intervals were flagged (`tle_ok = 0`). Cleaning thresholds remain
-  explicit parameters for review and sensitivity checks. Generated manifests, raw TLEs,
-  reports and `orbit_intervals_a2_a4.parquet` are under ignored `data/` for Drive sharing.
+  km high-altitude controls. The follow-up selection is spread across four 100 km bands
+  (39/63/82/66 main objects) and three objects in each high-altitude band. The revised
+  Apr 2024-Apr 2025 download yielded 203,954 deduplicated TLEs and 198,388 intervals;
+  seven gaps over five days and 5,294 onset-bridging intervals were omitted. The
+  three-times-robust-TLE-noise climb rule flagged 416 intervals; the tighter point-level
+  diagnostic flags 15 TLEs (0.0074%). `notebooks/05_orbit_cleaning_checks.ipynb` records
+  the before/after plot and May 2024 check; generated data remains under ignored `data/`.
+  First download (#18, before the follow-up): 205,145 deduplicated TLEs and 199,580 adjacent
+  intervals; 5,300 onset-bridging intervals were omitted and 4,705 passive-climb intervals
+  were flagged (`tle_ok = 0`). Cleaning thresholds remain explicit parameters for review
+  and sensitivity checks; raw TLEs and reports are under ignored `data/` for Drive sharing.
+- **Oct 30, B6 simulator (Sonu)**: with TLE noise, a near-zero interval next to an
+  inserted main_onset epoch made the day -1 reference row noisy enough to shift every
+  event-study coefficient, so epochs closer than 0.2 day to a main_onset are dropped.
+  With 6 storms the wild-bootstrap interval missed zero on null data; the recovery
+  test uses 300 days (11 storms) and the days 0..2 short-run effect. The quiet fit of
+  B is poor above ~700 km (decay of a few m/day vs ~30 m/day TLE noise per interval),
+  as on real data; it adds little to the residual in m/day there.
 
 - **Oct 27, DML review points (Holla)**: high-altitude negative control added (A, B, C, D
   tasks above); hourly ap returned as a space weather frame, not via `attrs`; DML

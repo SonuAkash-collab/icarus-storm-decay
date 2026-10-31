@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.objects import classify_activity
+from src.active_cohort import flag_free_drag_payloads
 from src.spacetrack_io import select_active_cohort
 
 
@@ -25,6 +26,14 @@ def test_starlink_name_is_low_thrust_active_fallback():
                             "object_name": ["STARLINK-1008"]})
     out = classify_activity(objects, pd.DataFrame()).iloc[0]
     assert out["is_active"] == 1
+
+
+def test_flags_long_starlink_free_drag():
+    objects = pd.DataFrame({"norad_id": [1], "object_name": ["STARLINK-1008"]})
+    starts = pd.date_range("2024-01-01", periods=30)
+    intervals = pd.DataFrame({"norad_id": 1, "t_start": starts,
+                              "t_end": starts + pd.Timedelta(days=1), "da_km": -0.05})
+    assert flag_free_drag_payloads(intervals, objects) == {1}
 
 
 def test_select_active_cohort_filters_payloads():

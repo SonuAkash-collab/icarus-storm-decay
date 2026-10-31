@@ -37,6 +37,7 @@ synthetic data.
 | #19 | Residual validation: outlier filter, `Y_total`, TLE-blur check, notebook 04 |
 | B6 | Physics simulator (`src/simulate.py`) with a known storm boost (PR pending) |
 | B4-B5 | Cohort physics and the real analysis table (`src/build_table.py`, notebook 05; PR pending) |
+| review | First-review figure pack: `python -m src.review_figures` -> `results/review/` (7 figures + SUMMARY.md; PR pending) |
 
 ## A: Piyush (orbit data)
 
@@ -449,6 +450,7 @@ synthetic data.
   10.3, drifting baselines of deorbiting satellites): compatible with 0 but weak; with catalog B
   ducking 0.65 (0.13 to 1.15), which shows that a wrong B scale fakes an offset. Caveats: one
   operator, catalog B, overlapping windows (storm 3's recovery window holds May 10), weak placebo.
+- **Oct 31: one free-drag rule (build_table.free_drag_flags); active_cohort guard is informational only.**
 - **Oct 31, DML real run (Holla)**: `python -m src.dml_run` on `analysis_table.parquet`
   (Oct 30; main sample 178,107 rows, 38 clusters = 20 storms + 18 quiet weeks), 999
   bootstrap draws, main lag 0 h. Effects in m/day per nT of interval-mean ap:

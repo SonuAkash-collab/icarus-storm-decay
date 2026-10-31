@@ -253,10 +253,11 @@ def ap_mean_shifted(df, hourly, shift_hours=0.0):
     return np.where((h0 >= -tol) & (h1 <= n + tol), mean_ap, np.nan)
 
 
-def lag_sweep(df, hourly, lags_hours=LAGS_HOURS, n_boot=999, seed=0, **dml_kw):
+def lag_sweep(df, hourly, outcome="Y_residual", lags_hours=LAGS_HOURS, n_boot=999, seed=0, **dml_kw):
     """DML with the treatment built from ap lag_hours earlier, for each lag.
 
-    df: from prepare. Rows whose shifted window leaves the hourly series at any lag
+    df: from prepare(table, outcome), with the same outcome passed here. Rows whose
+    shifted window leaves the hourly series at any lag
     are dropped from every lag, so all lags use the same rows. Returns a DataFrame
     indexed by lag (hours) with coef, se_cr1, se_boot, ci_lo, ci_hi, model_y, model_t
     (helper models are re-selected per lag), n_rows and n_dropped.
@@ -266,7 +267,7 @@ def lag_sweep(df, hourly, lags_hours=LAGS_HOURS, n_boot=999, seed=0, **dml_kw):
     rows = {}
     for lag in lags_hours:
         sub = df[ok].assign(ap_mean=shifted[lag][ok])
-        r = dml(sub, n_boot=n_boot, seed=seed, **dml_kw)
+        r = dml(sub, outcome, n_boot=n_boot, seed=seed, **dml_kw)
         rows[lag] = {k: r[k] for k in ["coef", "se_cr1", "se_boot", "ci_lo", "ci_hi", "model_y", "model_t"]}
         rows[lag].update(n_rows=int(ok.sum()), n_dropped=int((~ok).sum()))
     return pd.DataFrame(rows).T.rename_axis("lag_hours")

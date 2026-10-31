@@ -264,7 +264,8 @@ synthetic data.
   - ap lags 0 / 6 / 12 / 24 h: main lag fixed in advance, all four reported. Main lag = 0 h
     (`dml.MAIN_LAG_HOURS`, `dml.lag_sweep`).
   - Status: passes in both synthetic worlds (selection in the loop, true-leftover-ap
-    target): linear 48/50, curved 49/50. Lag sweep built. Still to do: real data.
+    target): linear 48/50, curved 49/50. Real run done (`python -m src.dml_run`, results
+    in the decision log, Oct 31); its checks are the refutations below.
 - [ ] **Refutations**: high-altitude group (>1,000 km) shows no effect, tested as
       equivalence (CI inside a pre-set band around zero), not just "not significant";
       it also catches storm-time TLE noise posing as decay. Random common cause leaves
@@ -407,7 +408,8 @@ synthetic data.
   strongest agreement at zero lag (r = 0.70). For Swarm-A, the period is now estimated
   from successive radius minima (93.83 min), duplicate timestamps across daily files are
   removed, and states are re-averaged over actual revolutions; the alternating-sign
-  artifact is gone (actual-period zero-lag correlation r = 0.457). Swarm remains a
+  artifact is gone; **Swarm-A zero-lag correlation is r = 0.457** after actual-period
+  averaging. Swarm remains a
   supporting cross-check pending review of the product.
 - **Oct 31, active payload guard (Piyush)**: Starlink names still provide the operational
   fallback, but objects with >=21 days of uninterrupted negative decay and no positive
@@ -467,3 +469,29 @@ synthetic data.
   2025 run does not). Pushing the calm day after 2-3 days later changes nothing (the simulator
   shows this removes a 2-day blur). Note: Oct 2024 is "severe" in the catalog, not "extreme".
   Headline stays: no general model error; extreme-storm error is storm-specific.
+- **Oct 31, DML real run (Holla)**: `python -m src.dml_run` on `analysis_table.parquet`
+  (Oct 30; main sample 178,107 rows, 38 clusters = 20 storms + 18 quiet weeks), 999
+  bootstrap draws, main lag 0 h. Effects in m/day per nT of interval-mean ap:
+
+  | | `Y_total` | `Y_residual` |
+  |---|---|---|
+  | Naive | -0.395 (CI -0.543 to -0.255) | -0.060 (CI -0.158 to 0.036) |
+  | Linear controls | -0.392 (CI -0.535 to -0.261) | -0.054 (CI -0.150 to 0.040) |
+  | **DML** | **-0.393 (CI -0.526 to -0.266)** | **-0.053 (CI -0.142 to 0.043)** |
+  | DML, ap model cautious / flexible XGBoost | -0.373 / -0.304 | -0.045 / -0.048 |
+  | Share of naive slope removed by adjustment | 0.01 | 0.13 |
+  | Lag 0 / 6 / 12 / 24 h | -0.39 / -0.33 / -0.21 / -0.06 (24 h CI covers 0) | -0.05 / 0.00 / +0.08 / +0.11 (24 h CI 0.04 to 0.19) |
+
+  Selection picked a straight line for ap (held-out R^2 -0.03; flexible XGBoost -0.38,
+  whose estimate is ~23% smaller, the same pull toward zero as on synthetic data) and
+  cautious / flexible XGBoost for the residual (held-out R^2 only 0.03 / 0.08). Reading:
+  (1) total effect about -39 m/day per 100 nT; on storm day 0 (mean ap 57 vs quiet 7 nT)
+  that is about -20 m/day, in line with the event study. (2) Naive and DML agree on real
+  data (robustness, as the plan says): both outcomes already subtract MSIS run with the
+  actual F10.7, so little Sun-UV confounding is left, which is also why the confounders
+  barely predict the residual. On synthetic data the UV error sat in the residual
+  directly. (3) Model error has no same-interval link to ap, but is positive for ap 12-24
+  h earlier (less decay than MSIS predicts the day after high ap): MSIS keeps the storm
+  atmosphere too long, as in the B prototype. Reported as MSIS mistiming, not a reason
+  to change the main lag; four lags were tried, so treat the 24 h result as supporting
+  evidence until the refutations (with / without May and Oct 2024) are in.

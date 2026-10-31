@@ -448,3 +448,4 @@ synthetic data.
   10.3, drifting baselines of deorbiting satellites): compatible with 0 but weak; with catalog B
   ducking 0.65 (0.13 to 1.15), which shows that a wrong B scale fakes an offset. Caveats: one
   operator, catalog B, overlapping windows (storm 3's recovery window holds May 10), weak placebo.
+- **Oct 31: one free-drag rule (build_table.free_drag_flags); active_cohort guard is informational only.**

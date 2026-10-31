@@ -1,4 +1,4 @@
-"""Plotting helpers (sanity check, space weather, physics-model comparison, cohort physics)."""
+"""Plotting helpers (sanity check, space weather, physics-model comparison, cohort physics, actives)."""
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -314,6 +314,84 @@ def plot_event_day_profile(profiles, title, ylabel, out_path=None):
     ax.set_xlabel("days from main_onset")
     ax.set_ylabel(ylabel)
     ax.set_title(title, loc="left", fontsize=12)
+    ax.legend(frameon=False, fontsize=9)
+    _clean_axes(ax)
+    fig.tight_layout()
+    if out_path is not None:
+        fig.savefig(out_path, dpi=150)
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Active satellites (notebooks/07)
+# ---------------------------------------------------------------------------
+
+def plot_catalog_scale(bodies, actives, out_path=None):
+    """Fitted / catalog drag sensitivity of rocket bodies against altitude, with the
+    scale given to each active satellite (build_table.catalog_scale).
+
+    bodies: frame with alt_km and ratio (one row per rocket body); actives: frame with
+    alt_km and scale (one row per active satellite).
+    """
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.scatter(bodies["alt_km"], bodies["ratio"], s=12, color=WEATHER_COLOR, alpha=0.6,
+               label=f"rocket bodies ({len(bodies)})")
+    ax.scatter(actives["alt_km"], actives["scale"], s=40, marker="D", color=DATA_COLOR,
+               label="scale used for actives (median within +-50 km)")
+    ax.axhline(1, color="k", lw=0.6, ls=":")
+    ax.set_xlabel("mean altitude (km)")
+    ax.set_ylabel("fitted B / catalog B")
+    ax.legend(frameon=False, fontsize=9)
+    _clean_axes(ax)
+    fig.tight_layout()
+    if out_path is not None:
+        fig.savefig(out_path, dpi=150)
+    return fig
+
+
+def plot_active_altitudes(active, ncols=5, out_path=None):
+    """Altitude (TLE mean a minus Earth radius) of every active satellite over the year,
+    rows flagged by build_table.free_drag_flags in red (left out of the offset ratio).
+
+    active: analysis-table rows with is_active = 1 (t_mid, alt_km_tle, free_drag, object_name).
+    """
+    import numpy as np
+
+    groups = list(active.groupby("norad_id"))
+    nrows = int(np.ceil(len(groups) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.6 * ncols, 2.2 * nrows), sharex=True)
+    axes = np.atleast_1d(axes).ravel()
+    for ax, (norad_id, g) in zip(axes, groups):
+        g = g.sort_values("t_mid")
+        ax.plot(g["t_mid"], g["alt_km_tle"], lw=0.6, color=WEATHER_COLOR)
+        bad = g[g["free_drag"] == 1]
+        ax.scatter(bad["t_mid"], bad["alt_km_tle"], s=1, color=EVENT_COLOR)
+        ax.set_title(f"{g['object_name'].iat[0]} ({norad_id})", fontsize=8)
+        ax.tick_params(labelsize=7)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %y"))
+        _clean_axes(ax)
+    for ax in axes[len(groups):]:
+        ax.set_visible(False)
+    fig.supylabel("altitude (km)")
+    fig.tight_layout()
+    if out_path is not None:
+        fig.savefig(out_path, dpi=120)
+    return fig
+
+
+def plot_match_gap(passive, active, out_path=None):
+    """Inclination against altitude for the passive pool and the active satellites:
+    shows whether actives have passive twins nearby (offset_ratio.match).
+
+    passive, active: one row per object with alt_km and inc_deg.
+    """
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.scatter(passive["alt_km"], passive["inc_deg"], s=10, color=WEATHER_COLOR, alpha=0.6,
+               label=f"passive main sample ({len(passive)})")
+    ax.scatter(active["alt_km"], active["inc_deg"], s=30, marker="D", color=DATA_COLOR,
+               label=f"active satellites ({len(active)})")
+    ax.set_xlabel("mean altitude (km)")
+    ax.set_ylabel("inclination (deg)")
     ax.legend(frameon=False, fontsize=9)
     _clean_axes(ax)
     fig.tight_layout()

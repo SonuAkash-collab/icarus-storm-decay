@@ -76,12 +76,29 @@ synthetic data.
         checks of notebook 04 are still to rerun on the cohort.
   - [ ] Blur-free outcome for the extreme storms: total altitude lost from a calm day before
         to a calm day after (decision rule below).
-- [ ] **B3 object catalog** (`src/objects.py`, branch `B3-objects`): CelesTrak SATCAT
-      type, launch date, decay date; `is_active` (payloads with detected maneuvers in
-      the year = active; debris, rocket bodies and payloads without maneuvers =
-      passive); DISCOSweb area-to-mass where available. Also save `area_to_mass` and
-      `drag_sensitivity_catalog = 2.2 * area_to_mass`. Output
-      `data/processed/objects.parquet`. Tests + notebook 05.
+- [ ] **B3 object catalog** (`src/objects.py`, branch `B3-object-catalog`): one row per
+      object, columns in `schema.OBJECT_COLUMNS`, checked by `schema.validate_objects`.
+  - [x] CelesTrak SATCAT (`fetch_satcat`, one JSON request per object, cached in
+        `data/raw/satcat_records.json`): `object_type` (debris / rocket body / payload /
+        unknown), `launch_date`, `decay_date`.
+  - [x] DISCOSweb (`fetch_discos`, token `DISCOS_TOKEN` in `.env`, API v2, 100 objects
+        per request, 3 s between requests, 429 waited out via Retry-After, cached in
+        `data/raw/discos_objects.json`): `mass_kg`, `xsect_avg_m2` (xSectAvg),
+        `area_to_mass` = A/m, `drag_sensitivity_catalog = 2.2 * area_to_mass`.
+  - [x] `detect_maneuvers(intervals)`: lasting semi-major-axis rises above the decay trend
+        and the object's own noise; `is_passive` / `is_active` (debris and rocket bodies
+        passive; payloads passive only if searched and no maneuver found; payloads without
+        intervals count as active).
+  - [x] `build_objects(norad_ids)` -> `data/processed/objects.parquet` (maneuver search on
+        `orbit_intervals_a2_a4.parquet` by default).
+  - [x] `compare_drag(measured, catalog)`: Spearman rho and log-log plot, fitted B vs
+        catalog, rocket bodies with both.
+  - [x] Tests (`tests/test_objects.py`, inline records, fake HTTP session); the two
+        download tests skip offline / without `DISCOS_TOKEN`.
+  - [ ] Run locally on the cohort (CelesTrak and DISCOSweb were unreachable from the
+        build container): `build_objects` on the 265 cohort IDs, check DISCOSweb field
+        names against a real reply, then `compare_drag` on the B4-B5 fits.
+  - [ ] Notebook 06 (notebooks 05 are taken).
 - [x] **B6 physics simulator** (`src/simulate.py`, branch `B6-physics-simulator`):
       synthetic orbits decaying through pymsis MSIS 2.1 density with a storm boost of
       known size, TLE-style noise that grows during storms, output validated with
@@ -234,7 +251,16 @@ synthetic data.
   model error `Y_residual` +0.2 (CI -3.2 to 3.2, placebo p = 0.88); high-altitude control
   `Y_total` -0.7 (CI -1.4 to 0.1). May/Oct 2024: MSIS 2.1 over-predicts days 0..+3 for
   almost every object (median +12 / +15 m/day), consistent with notebook 04.
-
+- **Oct 30, B3 object catalog (Sonu)**: payloads (and unknown types) count as passive only
+  if their decay intervals were searched and no maneuver was found; with no intervals they
+  count as active, so nothing unchecked enters the passive sample. A maneuver = median a
+  over the next 2 days minus median over the previous 2 days, after adding back the
+  expected decay (median of ~1-day rates within +-7 days), above max(0.2 km, 5 x noise);
+  noise from the upper half of that statistic, since storms only push it down. Synthetic
+  check (100 seeds): no false alarms with or without 2-day storms, single outlier TLEs
+  ignored, 0.3 km rises found 100/100 at 50 m/day decay, 1 km rises 99/100 at 400 m/day
+  decay with 40 m scatter. Catalog drag uses Cd = 2.2 and DISCOSweb's average
+  cross-section; compared with the fitted B by rank (Spearman) only.
 - **Oct 30, A2-A4 orbit pipeline (Piyush)**: selected 250 passive 400-800 km objects
   with coverage on at least 8 of 9 Space-Track snapshots, plus 15 separate 1,000-1,500
   km high-altitude controls. The follow-up selection is spread across four 100 km bands

@@ -320,3 +320,35 @@ def plot_event_day_profile(profiles, title, ylabel, out_path=None):
     if out_path is not None:
         fig.savefig(out_path, dpi=150)
     return fig
+
+
+def plot_event_study(result, title, ylabel="effect vs day -1 (m/day)", out_path=None):
+    """Stacked event-study coefficients by event day with 95% wild-cluster-bootstrap CIs.
+
+    result: event_study.event_study output (index k = days from main_onset, columns
+    coef, ci_lo, ci_hi, n_storms). Day -1 is the reference (fixed at 0); the short-run
+    window (days 0-2) is shaded.
+    """
+    r = result.sort_index()
+    ref = r.index[(r["coef"] == 0) & (r["ci_lo"] == 0) & (r["ci_hi"] == 0)]
+    est = r.drop(index=ref)
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.axvspan(-0.5, 2.5, color=EVENT_COLOR, alpha=0.07, lw=0)
+    ax.axhline(0, color=WEATHER_COLOR, lw=0.8)
+    ax.axvline(0, color=EVENT_COLOR, lw=0.8, ls="--")
+    ax.errorbar(est.index, est["coef"], yerr=[est["coef"] - est["ci_lo"], est["ci_hi"] - est["coef"]],
+                fmt="o", ms=4, color=DATA_COLOR, ecolor=DATA_COLOR, elinewidth=1, capsize=0)
+    ax.plot(ref, [0] * len(ref), "o", ms=4, mfc="white", mec=DATA_COLOR, label="reference day")
+    ax.text(1, 1.0, "days 0-2", color=EVENT_COLOR, ha="center", va="bottom", fontsize=9,
+            transform=ax.get_xaxis_transform())
+    ax.set_xlabel("days from main_onset")
+    ax.set_ylabel(ylabel)
+    n = result.attrs.get("n_clusters")
+    ax.set_title(title + (f" ({n} storms)" if n else ""), loc="left", fontsize=12, pad=14)
+    ax.set_xticks(range(int(r.index.min()), int(r.index.max()) + 1, 2))
+    ax.legend(frameon=False, fontsize=9, loc="lower right")
+    _clean_axes(ax)
+    fig.tight_layout()
+    if out_path is not None:
+        fig.savefig(out_path, dpi=150)
+    return fig

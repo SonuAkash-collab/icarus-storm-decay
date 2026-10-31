@@ -39,8 +39,8 @@ synthetic data.
 
 ## A: Piyush (orbit data)
 
-- [x] **A2-A4 cohort and cleaning** (#18): 400-800 km passive cohort, TLE cleaning, intervals
-      that never bridge a `main_onset`. 250 objects, 188,560 intervals; checked locally
+- [x] **A2-A4 cohort and cleaning** (#18, follow-up fixes #20): 400-800 km passive cohort, TLE cleaning, intervals
+      that never bridge a `main_onset`. First download (#18): 250 objects, 188,560 intervals; checked locally
       Oct 30: no nulls, no duplicate keys, 0 intervals bridge a `main_onset`, all ecc < 0.01.
       The cleaning flagged 0 inclination / RAAN jumps and 0 rolling-median outliers;
       B's Hampel filter on the residual (`physics.remove_outliers`) is the outlier step.
@@ -201,11 +201,17 @@ synthetic data.
 
 - **Oct 30, A2-A4 orbit pipeline (Piyush)**: selected 250 passive 400-800 km objects
   with coverage on at least 8 of 9 Space-Track snapshots, plus 15 separate 1,000-1,500
-  km high-altitude controls. The Apr 2024-Apr 2025 download yielded 205,145 deduplicated
-  TLEs and 199,580 adjacent intervals; 5,300 onset-bridging intervals were omitted and
-  4,705 passive-climb intervals were flagged (`tle_ok = 0`). Cleaning thresholds remain
-  explicit parameters for review and sensitivity checks. Generated manifests, raw TLEs,
-  reports and `orbit_intervals_a2_a4.parquet` are under ignored `data/` for Drive sharing.
+  km high-altitude controls. The follow-up selection is spread across four 100 km bands
+  (39/63/82/66 main objects) and three objects in each high-altitude band. The revised
+  Apr 2024-Apr 2025 download yielded 203,954 deduplicated TLEs and 198,388 intervals;
+  seven gaps over five days and 5,294 onset-bridging intervals were omitted. The
+  three-times-robust-TLE-noise climb rule flagged 416 intervals; the tighter point-level
+  diagnostic flags 15 TLEs (0.0074%). `notebooks/05_orbit_cleaning_checks.ipynb` records
+  the before/after plot and May 2024 check; generated data remains under ignored `data/`.
+  First download (#18, before the follow-up): 205,145 deduplicated TLEs and 199,580 adjacent
+  intervals; 5,300 onset-bridging intervals were omitted and 4,705 passive-climb intervals
+  were flagged (`tle_ok = 0`). Cleaning thresholds remain explicit parameters for review
+  and sensitivity checks; raw TLEs and reports are under ignored `data/` for Drive sharing.
 - **Oct 30, B6 simulator (Sonu)**: with TLE noise, a near-zero interval next to an
   inserted main_onset epoch made the day -1 reference row noisy enough to shift every
   event-study coefficient, so epochs closer than 0.2 day to a main_onset are dropped.

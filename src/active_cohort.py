@@ -18,7 +18,8 @@ Steps (all downloads cached under data/raw/, outputs under data/processed/):
 Outputs:
     data/processed/active_cohort_manifest.parquet    selected objects (+ object_name)
     data/processed/active_tles_cleaned.parquet       cleaned TLEs with line1/line2
-    data/processed/active_activity.parquet           per object: is_active, n_maneuvers
+    data/processed/active_activity.parquet           per object: is_active, n_maneuvers,
+                                                     free_drag_flag (informational only)
     data/processed/orbit_intervals_actives.parquet   intervals of the active objects
 """
 
@@ -54,9 +55,10 @@ SNAPSHOT_FIELDS = ["NORAD_CAT_ID", "OBJECT_NAME", "OBJECT_TYPE", "EPOCH", "ECCEN
 def flag_free_drag_payloads(intervals, objects, min_days=21.0):
     """Return Starlink IDs with sustained decay and no station-keeping evidence.
 
-    These are treated as failed/deorbiting payloads rather than operator-response
-    observations. The conservative rule requires at least ``min_days`` of coverage
-    and no positive maneuver event in the interval series.
+    Informational guard only: the rule requires at least ``min_days`` of coverage
+    and no positive maneuver event in the interval series. It never changes
+    is_active / is_passive or which intervals are kept. build_table.free_drag_flags
+    (per row, in the analysis table) decides free_drag for the analysis.
     """
     starlink = objects[objects.get("object_name", "").astype("string").str.upper().str.startswith("STARLINK")]
     if starlink.empty or intervals.empty:
@@ -86,12 +88,9 @@ def build_active_intervals(records, storms, objects, **cleaning_kwargs):
     if "ops_status_code" in objects:
         columns.append("ops_status_code")
     activity = classify_activity(objects[columns], intervals)
+    # Informational only: build_table.free_drag_flags decides free_drag for the analysis.
     free_drag = flag_free_drag_payloads(intervals, objects, min_days=21.0)
-    if free_drag:
-        activity.loc[activity["norad_id"].isin(free_drag), ["is_active", "is_passive"]] = [0, 1]
-        activity["free_drag_flag"] = activity["norad_id"].isin(free_drag).astype("int64")
-    else:
-        activity["free_drag_flag"] = 0
+    activity["free_drag_flag"] = activity["norad_id"].isin(free_drag).astype("int64")
     active_ids = activity.loc[activity["is_active"].eq(1), "norad_id"]
     active = intervals[intervals["norad_id"].isin(active_ids)].merge(
         activity[["norad_id", "is_active", "n_maneuvers"]], on="norad_id", how="left"

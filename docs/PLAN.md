@@ -454,6 +454,7 @@ synthetic data.
   10.3, drifting baselines of deorbiting satellites): compatible with 0 but weak; with catalog B
   ducking 0.65 (0.13 to 1.15), which shows that a wrong B scale fakes an offset. Caveats: one
   operator, catalog B, overlapping windows (storm 3's recovery window holds May 10), weak placebo.
+- **Oct 31: one free-drag rule (build_table.free_drag_flags); active_cohort guard is informational only.**
 - **Oct 31, extreme-storm check (Sonu)**: verdict **mixed**. Rules: an over-prediction is a real
   model overshoot only if the days 0..+3 change survives 3-day smoothing (95% CI over objects
   above 0) AND the calm-to-calm loss is smaller than predicted against both baselines (the

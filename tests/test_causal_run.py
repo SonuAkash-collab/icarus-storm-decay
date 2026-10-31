@@ -83,3 +83,25 @@ def test_actives_without_twins_report_instead_of_failing(fake, tmp_path):
     text = (tmp_path / "summary.md").read_text()
     assert "Not estimated" in text and "Debris placebo" in text
     assert (tmp_path / "offset_match_diagnostics.csv").exists() and not (tmp_path / "offset_ratio.csv").exists()
+
+
+def test_model_offset_skipped_without_real_columns(fake, tmp_path):
+    table, storms = fake
+    mod = cr.model_part(table, storms, n_boot=9)
+    assert "error" in mod and "obs_decay" in mod["error"]
+    assert "Not run" in cr.model_text(mod)
+
+
+def test_model_offset_written_and_summarised(tmp_path):
+    from test_offset_model import fake_storms, fake_table
+    storms = fake_storms()
+    table = fake_table(storms, duck=0.5, recover=0.4, n_drag=2)
+    mod = cr.model_part(table, storms, n_boot=19)
+    assert "error" not in mod
+    cr.write({"sample_report": pd.DataFrame(columns=["filter", "removed", "share"]), "event_study": {},
+              "high_alt": {}, "offset": None, "offset_model": mod}, tmp_path)
+    for name in ("offset_model.csv", "offset_model_placebo.csv", "offset_model_errors.csv",
+                 "offset_model_b_sensitivity.csv", "offset_model_pairs.csv"):
+        assert (tmp_path / name).exists()
+    text = (tmp_path / "summary.md").read_text()
+    assert "Model-based offset ratio" in text and "Placebo" in text and "| all storms | corrected |" in text

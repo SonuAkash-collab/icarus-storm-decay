@@ -23,6 +23,11 @@ satellites (the passive cohort before B3) skips the offset ratio and says so.
 The high-altitude group (schema.high_alt_sample) gets its own event study as a
 negative control: its short-run effect should be about zero.
 
+Model-based offset ratio (src/offset_model.py): each active satellite against its own
+physics-predicted storm loss, all storms, with / without May and Oct 2024, uncorrected
+and corrected for the passive cohort's model error, with the free-drag Starlink placebo.
+It runs when the table has the real-table columns it needs (MODEL_COLUMNS).
+
 Writes CSV files and summary.md to the output folder (default results/causal), one
 event-study figure per outcome to the figure folder (default results/), and returns
 the results as a dict.
@@ -35,11 +40,13 @@ import pandas as pd
 
 from src import event_checks as ec
 from src import event_study as es
+from src import offset_model as om
 from src import offset_ratio as orr
 from src.schema import ROOT, high_alt_sample, load_table, sample_report
 
 OUTCOMES = ["Y_total", "Y_residual"]
 OFFSET_OUTCOME = "Y_total"
+MODEL_COLUMNS = ["obs_decay", "pred_decay", "Y_total", "free_drag", "object_name"]
 OUT_DIR = ROOT / "results" / "causal"
 FIG_DIR = ROOT / "results"
 OUTCOME_LABELS = {"Y_total": "Total storm effect (Y_total)",
@@ -86,6 +93,17 @@ def offset_part(table, storms, n_boot=999, n_placebo_reps=20, seed=0):
                                                              n_boot=n_boot, seed=seed)}
 
 
+def model_part(table, storms, n_boot=999, seed=0):
+    """offset_model.run, or {"error": reason} if the table lacks its columns or storms."""
+    missing = [c for c in MODEL_COLUMNS if c not in table]
+    if missing:
+        return {"error": f"the table has no {missing} (real-table columns from src/build_table.py)"}
+    try:
+        return om.run(table, storms, n_boot=n_boot, seed=seed)
+    except ValueError as e:
+        return {"error": str(e)}
+
+
 def run(table, storms, out_dir=OUT_DIR, outcomes=None, n_placebo=500, n_boot=999,
         n_placebo_reps=20, seed=0, fig_dir=FIG_DIR):
     """All track C results on one table; writes them to out_dir and returns a dict."""
@@ -99,6 +117,7 @@ def run(table, storms, out_dir=OUT_DIR, outcomes=None, n_placebo=500, n_boot=999
     # The offset ratio needs active satellites (question 3); skip it without them
     has_actives = bool((table["is_active"] == 1).any())
     out["offset"] = offset_part(table, storms, n_boot, n_placebo_reps, seed) if has_actives else None
+    out["offset_model"] = model_part(table, storms, n_boot, seed) if has_actives else None
     write(out, Path(out_dir))
     if fig_dir is not None:
         figures(out, Path(fig_dir))
@@ -120,6 +139,13 @@ def figures(out, fig_dir):
 
 def write(out, out_dir):
     out_dir.mkdir(parents=True, exist_ok=True)
+    mod = out.get("offset_model")
+    if mod is not None and "error" not in mod:
+        mod["summary"].to_csv(out_dir / "offset_model.csv")
+        mod["placebo"].to_csv(out_dir / "offset_model_placebo.csv")
+        mod["errors"].to_csv(out_dir / "offset_model_errors.csv", index=False)
+        mod["b_sensitivity"].to_csv(out_dir / "offset_model_b_sensitivity.csv")
+        mod["pairs"].to_csv(out_dir / "offset_model_pairs.csv", index=False)
     out["sample_report"].to_csv(out_dir / "sample_report.csv", index=False)
     for outcome, r in out["event_study"].items():
         d = out_dir / outcome
@@ -150,6 +176,47 @@ def _fmt(row):
 
 def summary_text(out):
     """Headline numbers as Markdown, for the paper and the team."""
+    return _summary_text(out) + model_text(out.get("offset_model"))
+
+
+MODEL_STATS = {"offset_total": "Total offset ratio", "offset_duck": "Ducking window",
+               "offset_rec": "Recovery window (noisy: small predicted loss)",
+               "duck_part": "Ducking part of total", "rec_part": "Recovery part of total"}
+
+
+def model_text(mod):
+    """Markdown section for the model-based offset ratio (empty if it was not run)."""
+    if mod is None:
+        return ""
+    lines = ["", "## Model-based offset ratio (each satellite vs its own physics prediction)", ""]
+    if "error" in mod:
+        return "\n".join(lines + [f"Not run: {mod['error']}."]) + "\n"
+    s = mod["summary"]
+    first = s.iloc[0]
+    lines += [f"- {int(first['n_storms'])} storms, {int(first['n_objects'])} active satellites, "
+              f"{int(first['n_pairs'])} storm-satellite pairs (rows not free_drag, no orbit change).",
+              "- Offset = 1 - observed / predicted storm loss; 95% CI from a storm-clustered wild bootstrap.",
+              "", "| Storms | Prediction | Statistic | Estimate | 95% CI | Storms used |", "|---|---|---|---|---|---|"]
+    for (storms_name, pred, stat), row in s.iterrows():
+        lines.append(f"| {storms_name} | {pred} | {MODEL_STATS[stat]} | {row['est']:.3f} "
+                     f"| {row['ci_lo']:.3f} to {row['ci_hi']:.3f} | {int(row['n_storms'])} |")
+    b = mod["b_sensitivity"]
+    lines += ["", "- Drag-sensitivity scale (true B = k x catalog-scaled B), total offset: "
+              + ", ".join(f"k = {k}: {b.loc['offset_total', k]:.3f}" for k in b.columns) + "."]
+    pl = mod["placebo"]
+    if len(pl):
+        n = int(pl.iloc[0]["n_objects"])
+        lines += ["", f"Placebo: {n} free-drag Starlinks (should be ~0)", "",
+                  "| B | Prediction | Statistic | Estimate | 95% CI |", "|---|---|---|---|---|"]
+        for (b_name, pred, stat), row in pl.iterrows():
+            if stat in ("offset_total", "offset_duck"):
+                lines.append(f"| {b_name} | {pred} | {MODEL_STATS[stat]} | {row['est']:.3f} "
+                             f"| {row['ci_lo']:.3f} to {row['ci_hi']:.3f} |")
+    return "\n".join(lines) + "\n"
+
+
+def _summary_text(out):
+    """Event-study and twin offset-ratio sections."""
     lines = ["# Track C results", ""]
     rep = out["sample_report"]
     lines += ["## Sample", "", "| Filter | Rows removed | Share |", "|---|---|---|"]

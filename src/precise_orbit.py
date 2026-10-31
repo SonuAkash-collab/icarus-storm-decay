@@ -52,6 +52,56 @@ def daily_precise_axis(precise, freq="D"):
     return data.rename("a_km_precise").reset_index()
 
 
+def orbit_averaged_precise_axis(precise, period_minutes=94.0):
+    """Average precise osculating semi-major axis over one orbital period.
+
+    A daily median still contains the within-orbit oscillation. Binning the 10 s
+    states into successive orbital periods removes that oscillation before daily
+    decay rates are computed.
+    """
+    if period_minutes <= 0:
+        raise ValueError("period_minutes must be positive")
+    data = precise.sort_values("time").copy()
+    elapsed_minutes = (data["time"] - data["time"].iloc[0]).dt.total_seconds() / 60.0
+    data["orbit_number"] = np.floor(elapsed_minutes / period_minutes).astype(int)
+    return (data.groupby("orbit_number", as_index=False)
+            .agg(time=("time", "median"), a_km_precise=("a_km_precise", "median")))
+
+
+def daily_decay_rates(axis, value_column, smoothing_days=1):
+    """Return daily d(a)/dt in km/day from an orbit-averaged or TLE axis table."""
+    if smoothing_days < 1:
+        raise ValueError("smoothing_days must be positive")
+    values = axis.set_index("time")[value_column].resample("D").median().dropna()
+    if smoothing_days > 1:
+        values = values.rolling(smoothing_days, center=True, min_periods=1).median()
+    return values.diff().rename("decay_km_per_day").dropna().reset_index()
+
+
+def compare_decay_rates(tles, precise, period_minutes=94.0, smoothing_days=1, max_lag_days=3):
+    """Compare daily TLE and orbit-averaged precise decay rates with a lag sweep."""
+    tle = tles[["epoch", "a_km"]].rename(columns={"epoch": "time", "a_km": "a_km_tle"})
+    tle["time"] = pd.to_datetime(tle["time"])
+    tle = tle.groupby(tle["time"].dt.floor("D"), as_index=False)["a_km_tle"].median()
+    tle = tle.rename(columns={"time": "time"})
+    precise_axis = orbit_averaged_precise_axis(precise, period_minutes)
+    precise_daily = daily_decay_rates(precise_axis, "a_km_precise", smoothing_days)
+    tle_daily = daily_decay_rates(tle, "a_km_tle", smoothing_days)
+    rates = tle_daily.rename(columns={"decay_km_per_day": "tle_decay_km_per_day"}).merge(
+        precise_daily.rename(columns={"decay_km_per_day": "precise_decay_km_per_day"}),
+        on="time", how="inner",
+    )
+    lag_rows = []
+    for lag in range(-max_lag_days, max_lag_days + 1):
+        shifted = precise_daily.copy()
+        shifted["time"] = shifted["time"] + pd.Timedelta(days=lag)
+        joined = tle_daily.merge(shifted, on="time")
+        corr = joined.iloc[:, 1].corr(joined.iloc[:, 2]) if len(joined) >= 3 else np.nan
+        lag_rows.append({"lag_days": lag, "n_days": len(joined), "correlation": corr})
+    lags = pd.DataFrame(lag_rows)
+    return rates, lags
+
+
 def compare_tle_precise(tles, precise, smoothing_days=3):
     """Compare daily TLE and precise-orbit semi-major-axis trends.
 

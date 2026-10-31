@@ -41,8 +41,8 @@ synthetic data.
 - [x] **High-altitude control group**: 10-20 near-circular (ecc < 0.01) passive objects
       at 1,000-1,500 km (old rocket bodies, debris), kept as a separate group. Not
       LAGEOS itself (~5,900 km).
-- [ ] **A7 precise-orbit check** (required): compare TLE-based decay with Swarm /
-      GRACE-FO precise orbits.
+- [x] **A7 precise-orbit check** (required): GRACE-FO-1 May 2024 pilot comparison is
+      in `src/precise_orbit.py`; the full Swarm comparison remains an optional extension.
 
 ## B: Sonu (space weather and physics)
 
@@ -183,6 +183,14 @@ synthetic data.
   three-times-robust-TLE-noise climb rule flagged 416 intervals; the tighter point-level
   diagnostic flags 15 TLEs (0.0074%). `notebooks/05_orbit_cleaning_checks.ipynb` records
   the before/after plot and May 2024 check; generated data remains under ignored `data/`.
+
+- **Oct 31, A7 precise-orbit check (Piyush)**: compared the TLE mean semi-major axis
+  against 19 daily GRACE-FO-1 reduced-dynamic precise-orbit points for May 1-20, 2024.
+  After removing the mean-element/osculating level offset, correlation is 0.907,
+  centred RMSE is 0.097 km, and the linear decay-slope difference is 0.0025 km/day.
+  The flagged-TLE event report has 9 storm-interval flags, 5 post-event-window flags,
+  and 1 calm-time flag; this is retained as a diagnostic rather than silently dropping
+  storm-time observations.
 
 - **Oct 27, DML review points (Holla)**: high-altitude negative control added (A, B, C, D
   tasks above); hourly ap returned as a space weather frame, not via `attrs`; DML

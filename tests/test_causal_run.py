@@ -33,7 +33,7 @@ def test_checks_follow_the_outcome(fake):
 
 
 def test_run_without_y_total_falls_back_and_says_so(fake, tmp_path):
-    out = cr.run(*fake, out_dir=tmp_path, **QUICK)
+    out = cr.run(*fake, out_dir=tmp_path, fig_dir=tmp_path, **QUICK)
     assert list(out["event_study"]) == ["Y_residual"]
     assert out["offset"]["outcome"] == "Y_residual"
     text = (tmp_path / "summary.md").read_text()
@@ -47,15 +47,17 @@ def test_run_without_y_total_falls_back_and_says_so(fake, tmp_path):
 
 def test_run_with_both_estimands(fake, tmp_path):
     table, storms = fake
-    out = cr.run(table.assign(Y_total=table["Y_residual"]), storms, out_dir=tmp_path, **QUICK)
+    out = cr.run(table.assign(Y_total=table["Y_residual"]), storms, out_dir=tmp_path, fig_dir=tmp_path, **QUICK)
     assert list(out["event_study"]) == ["Y_total", "Y_residual"]
     assert out["offset"]["outcome"] == "Y_total"
     assert "missing" not in (tmp_path / "summary.md").read_text()
+    for outcome in ("Y_total", "Y_residual"):
+        assert (tmp_path / f"event_study_{outcome}.png").stat().st_size > 10_000
 
 
 def test_passive_only_table_skips_offset_ratio(fake, tmp_path):
     table, storms = fake
-    out = cr.run(table[table["is_active"] == 0], storms, out_dir=tmp_path, **QUICK)
+    out = cr.run(table[table["is_active"] == 0], storms, out_dir=tmp_path, fig_dir=tmp_path, **QUICK)
     assert out["offset"] is None
     assert "Not run: the table has no active satellites" in (tmp_path / "summary.md").read_text()
     assert not (tmp_path / "offset_ratio.csv").exists()
@@ -64,7 +66,7 @@ def test_passive_only_table_skips_offset_ratio(fake, tmp_path):
 def test_no_outcome_raises(fake, tmp_path):
     table, storms = fake
     with pytest.raises(ValueError, match="none of the outcomes"):
-        cr.run(table.drop(columns="Y_residual"), storms, out_dir=tmp_path, **QUICK)
+        cr.run(table.drop(columns="Y_residual"), storms, out_dir=tmp_path, fig_dir=None, **QUICK)
 
 
 def test_actives_without_twins_report_instead_of_failing(fake, tmp_path):

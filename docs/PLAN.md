@@ -204,6 +204,24 @@ synthetic data.
       5-day sensitivity runs, the high-altitude negative control and the offset ratio
       on `Y_total`. Writes CSVs and `summary.md` to `results/causal`. Tested on
       synthetic data; on Nov 18 run `python -m src.causal_run`.
+- [x] **Real run, event study** (Oct 31, `analysis_table.parquet` of Oct 30, 500 placebo
+      draws, 999 bootstrap draws; reproduces Sonu's smoke test). Main sample 178,107 of
+      199,580 rows (high-altitude 5.5%, failed TLE cleaning 5.2%); 12 of 20 storms clean.
+
+      | Days 0-2 (m/day) | `Y_total` | `Y_residual` |
+      |---|---|---|
+      | All storms | -14.06 (CI -19.75 to -8.40) | +0.15 (CI -3.16 to 3.19) |
+      | Placebo dates p (main inference) | < 0.002 (0 of 500; placebo mean 0.36, SD 1.27) | 0.88 |
+      | Pre-trend p (placebo) | 0.41 | 0.30 |
+      | Without May/Oct 2024 (storms 3, 4, 11; 9 storms) | -13.85 (CI -16.63 to -10.87) | -2.22 (CI -4.35 to 0.01) |
+      | `(-3, 10)` rule (9 storms) | -10.09 (CI -14.02 to -6.22) | +1.42 (CI -2.52 to 5.38) |
+      | High-altitude control (15 objects) | -0.69 (CI -1.42 to 0.07) | -0.17 (CI -0.68 to 0.34) |
+
+      Figures: `results/event_study_Y_total.png`, `results/event_study_Y_residual.png`.
+      Day 0 carries most of the total effect (about -30 m/day), day 1 about -12, back near
+      0 by day 2; model error is -9 on day 0 and slightly positive on days 1-2.
+- [ ] **Real run, offset ratio**: waits for the active satellites to join the table
+      (25 Starlink + 1 other); question 3 is then effectively about Starlink.
 - [ ] **Paper**: intro, data/physics setup, DAG, event study, offset ratio. Draft
       written on synthetic results; real numbers go in from `results/causal/summary.md`.
 

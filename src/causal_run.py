@@ -23,8 +23,9 @@ satellites (the passive cohort before B3) skips the offset ratio and says so.
 The high-altitude group (schema.high_alt_sample) gets its own event study as a
 negative control: its short-run effect should be about zero.
 
-Writes CSV files and summary.md to the output folder (default results/causal) and
-returns the results as a dict.
+Writes CSV files and summary.md to the output folder (default results/causal), one
+event-study figure per outcome to the figure folder (default results/), and returns
+the results as a dict.
 """
 
 import argparse
@@ -40,6 +41,9 @@ from src.schema import ROOT, high_alt_sample, load_table, sample_report
 OUTCOMES = ["Y_total", "Y_residual"]
 OFFSET_OUTCOME = "Y_total"
 OUT_DIR = ROOT / "results" / "causal"
+FIG_DIR = ROOT / "results"
+OUTCOME_LABELS = {"Y_total": "Total storm effect (Y_total)",
+                  "Y_residual": "MSIS 2.1 model error (Y_residual)"}
 
 
 def available_outcomes(table, outcomes=OUTCOMES):
@@ -83,7 +87,7 @@ def offset_part(table, storms, n_boot=999, n_placebo_reps=20, seed=0):
 
 
 def run(table, storms, out_dir=OUT_DIR, outcomes=None, n_placebo=500, n_boot=999,
-        n_placebo_reps=20, seed=0):
+        n_placebo_reps=20, seed=0, fig_dir=FIG_DIR):
     """All track C results on one table; writes them to out_dir and returns a dict."""
     outcomes = available_outcomes(table, outcomes or OUTCOMES)
     if not outcomes:
@@ -96,7 +100,22 @@ def run(table, storms, out_dir=OUT_DIR, outcomes=None, n_placebo=500, n_boot=999
     has_actives = bool((table["is_active"] == 1).any())
     out["offset"] = offset_part(table, storms, n_boot, n_placebo_reps, seed) if has_actives else None
     write(out, Path(out_dir))
+    if fig_dir is not None:
+        figures(out, Path(fig_dir))
     return out
+
+
+def figures(out, fig_dir):
+    """event_study_<outcome>.png: coefficients by event day with 95% CIs."""
+    import matplotlib.pyplot as plt
+
+    from src.plots import plot_event_study
+
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    for outcome, r in out["event_study"].items():
+        fig = plot_event_study(r["result"], OUTCOME_LABELS.get(outcome, outcome),
+                               out_path=fig_dir / f"event_study_{outcome}.png")
+        plt.close(fig)
 
 
 def write(out, out_dir):
@@ -199,6 +218,7 @@ def main(argv=None):
     p.add_argument("--synthetic", action="store_true", help="run on make_synthetic instead")
     p.add_argument("--quick", action="store_true", help="few draws, for a smoke test")
     p.add_argument("--out", default=str(OUT_DIR))
+    p.add_argument("--figures", default=str(FIG_DIR))
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args(argv)
     if args.synthetic:
@@ -208,7 +228,7 @@ def main(argv=None):
         from src.storms import load_storms
         table, storms = load_table(args.table), load_storms(args.storms)
     draws = dict(n_placebo=20, n_boot=49, n_placebo_reps=4) if args.quick else {}
-    out = run(table, storms, args.out, seed=args.seed, **draws)
+    out = run(table, storms, args.out, seed=args.seed, fig_dir=args.figures, **draws)
     print(summary_text(out))
 
 

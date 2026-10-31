@@ -249,6 +249,49 @@ def cleaning_sensitivity(tles, settings=None):
     return pd.DataFrame(rows)
 
 
+def flagged_tles_by_event_day(tles, storms, settings=None):
+    """Return tight-setting flagged TLEs with storm-relative timing.
+
+    ``event_day`` is measured from the nearest storm ``main_onset`` when the TLE
+    falls in the configured -10..+20-day event window. ``period`` distinguishes
+    the active storm interval, its event-window pre/post days, and calm time. This
+    makes it possible to check that the diagnostic filter is not selectively
+    deleting storm-time orbit response.
+    """
+    cleaned, _ = clean_tle_history(tles, **(settings or {
+        "max_inc_jump_deg": 0.25,
+        "max_raan_rate_residual_deg_per_day": 0.5,
+        "rolling_mad_threshold": 5.0,
+        "outlier_floor_km": 0.25,
+    }))
+    flagged = cleaned.loc[cleaned["tle_ok"].eq(0)].copy()
+    onset = pd.to_datetime(storms["main_onset"]).sort_values().to_numpy()
+    storm_ids = storms.sort_values("main_onset")["storm_id"].to_numpy()
+    recovery = pd.to_datetime(storms.sort_values("main_onset")["recovery_end"]).to_numpy()
+    event_days, ids, periods = [], [], []
+    for timestamp in pd.to_datetime(flagged["epoch"]):
+        distances = np.abs((onset - timestamp.to_datetime64()) / np.timedelta64(1, "D"))
+        nearest = int(np.argmin(distances))
+        day = float((timestamp.to_datetime64() - onset[nearest]) / np.timedelta64(1, "D"))
+        if -10 <= day <= 20:
+            event_days.append(day)
+            ids.append(int(storm_ids[nearest]))
+            if timestamp.to_datetime64() <= recovery[nearest]:
+                periods.append("storm")
+            elif day < 0:
+                periods.append("pre_event_window")
+            else:
+                periods.append("post_event_window")
+        else:
+            event_days.append(np.nan)
+            ids.append(pd.NA)
+            periods.append("calm")
+    flagged["storm_id"] = pd.array(ids, dtype="Int64")
+    flagged["event_day"] = event_days
+    flagged["period"] = periods
+    return flagged[["norad_id", "epoch", "storm_id", "event_day", "period", "tle_ok"]]
+
+
 def build_decay_intervals(
     tles,
     storms,

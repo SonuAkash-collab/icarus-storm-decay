@@ -403,7 +403,8 @@ synthetic data.
   strongest agreement at zero lag (r = 0.70). For Swarm-A, the period is now estimated
   from successive radius minima (93.83 min), duplicate timestamps across daily files are
   removed, and states are re-averaged over actual revolutions; the alternating-sign
-  artifact is gone (actual-period zero-lag correlation r = 0.457). Swarm remains a
+  artifact is gone; **Swarm-A zero-lag correlation is r = 0.457** after actual-period
+  averaging. Swarm remains a
   supporting cross-check pending review of the product.
 - **Oct 31, active payload guard (Piyush)**: Starlink names still provide the operational
   fallback, but objects with >=21 days of uninterrupted negative decay and no positive

@@ -93,6 +93,11 @@ synthetic data.
         `orbit_intervals_a2_a4.parquet` by default).
   - [x] `compare_drag(measured, catalog)`: Spearman rho and log-log plot, fitted B vs
         catalog, rocket bodies with both.
+  - [x] First local run (branch `B3-local-run`, `notebooks/06_objects.ipynb`): field names
+        checked against raw DISCOSweb and SATCAT replies (no change needed), 265/265 objects
+        found in both. 118 have catalog A/m (116 rocket bodies of 116, 2 debris of 149);
+        the cohort has no payloads, so 0 flagged active. Rocket bodies: Spearman rho = 0.81
+        (n = 116, 0.82 for the 109 in 400-800 km). Next: join `objects.parquet` to the table.
   - [x] Tests (`tests/test_objects.py`, inline records, fake HTTP session); the two
         download tests skip offline / without `DISCOS_TOKEN`.
   - [ ] Run locally on the cohort (CelesTrak and DISCOSweb were unreachable from the
@@ -261,6 +266,13 @@ synthetic data.
   ignored, 0.3 km rises found 100/100 at 50 m/day decay, 1 km rises 99/100 at 400 m/day
   decay with 40 m scatter. Catalog drag uses Cd = 2.2 and DISCOSweb's average
   cross-section; compared with the fitted B by rank (Spearman) only.
+- **Oct 31, B3 first run (Sonu)**: fitted vs catalog B for rocket bodies has rho = 0.81, but
+  the 116 bodies share only 19 distinct catalog A/m values (15 stage types), so it is
+  closer to a check on about 15 stage types than 116 independent points; report it so.
+  Fitted B is about 0.8 x the catalog (median), and fitted / catalog grows with altitude
+  (Spearman 0.56), consistent with an orientation-averaged cross-section and Cd = 2.2 as a
+  convention; only the ranking is used as validation. Debris has no usable catalog A/m
+  (2 of 149), so debris B rests on the fit alone.
 - **Oct 30, A2-A4 orbit pipeline (Piyush)**: selected 250 passive 400-800 km objects
   with coverage on at least 8 of 9 Space-Track snapshots, plus 15 separate 1,000-1,500
   km high-altitude controls. The follow-up selection is spread across four 100 km bands

@@ -261,7 +261,7 @@ synthetic data.
   - Status: passes in both synthetic worlds (selection in the loop, true-leftover-ap
     target): linear 48/50, curved 49/50. Real run done (`python -m src.dml_run`, results
     in the decision log, Oct 31); its checks are the refutations below.
-- [ ] **Refutations**: high-altitude group (>1,000 km) shows no effect, tested as
+- [ ] **Refutations** (`src/dml_refute.py`, real run Oct 31, decision log): high-altitude group (>1,000 km) shows no effect, tested as
       equivalence (CI inside a pre-set band around zero), not just "not significant";
       it also catches storm-time TLE noise posing as decay. Random common cause leaves
       the estimate unchanged; shuffled storm timing gives zero; with and without
@@ -477,3 +477,35 @@ synthetic data.
   atmosphere too long, as in the B prototype. Reported as MSIS mistiming, not a reason
   to change the main lag; four lags were tried, so treat the 24 h result as supporting
   evidence until the refutations (with / without May and Oct 2024) are in.
+- **Oct 31, DML refutations (Holla)**: `python -m src.dml_refute`, real table, 999 bootstrap
+  draws, 20 placebo shifts. Equivalence band for the high-altitude control fixed before
+  the run at +-50% of the main estimate (Sidhant; with 15 high objects the synthetic
+  interval fits +-50% in 10/10 seeds, +-33% in 5/10). Effects in m/day per nT:
+
+  | | `Y_total` (main -0.393) | `Y_residual` (main -0.053, CI covers 0) |
+  |---|---|---|
+  | High-altitude control (15 objects) | -0.023 (CI -0.026 to -0.021): inside +-0.196, PASS; ~6% of the main effect, not exactly 0 | -0.009 (CI -0.013 to -0.006); no band (main covers 0) |
+  | Random common cause | moved -0.02 SE | moved +0.08 SE |
+  | Shuffled storm timing (20) | mean -0.003, SD 0.031; none as large as the real | mean -0.007, SD 0.025; none as large |
+  | Without May / Oct 2024 (storms 3, 4, 11) | -0.511 (CI -0.648 to -0.375) | -0.159 (CI -0.273 to -0.050) |
+  | Lag 0 / 6 / 12 / 24 h without them | (not rerun) | -0.15 / -0.11 / 0.00 / +0.05 (12-24 h CIs cover 0) |
+
+  Planted 12 h lag on synthetic data: the sweep peaks at 12 h (-0.0181 vs planted -0.0187;
+  0 h -0.0109), so it can find a lag. Reading: the total effect is not carried by the
+  superstorms (per nT it is larger without them: the response saturates at extreme ap).
+  The 12-24 h positive model error (MSIS keeps the storm atmosphere too long) needs May /
+  Oct 2024, so per the decision rule it is reported as driven by the extreme storms, not
+  generalised. Without them, model error is negative in the storm interval itself: in
+  ordinary storms objects fall faster than MSIS predicts; with them the two cancel.
+- **Oct 31, model error by storm class (Holla)**: `python -m src.storm_class`, per-storm
+  change (days 0..+3 minus days -10..-3) from `review_figures.storm_class_error`; t
+  interval over storms for classes with >= 3 storms, none for severe (2) / extreme (1);
+  exact permutation test of severe + extreme vs the rest over all C(20, 3) = 1,140
+  splits. `Y_residual`: moderate +0.3 (CI -6.5 to 7.1), strong -4.2 (CI -19.3 to 10.8),
+  severe +34.2 (Oct 2024) and -14.3 (Jan 2025), extreme +10.3 (May 2024); big minus rest
+  +11.3 m/day, **p = 0.20**. `Y_total`: big minus rest -10.2, p = 0.30. So at storm level
+  the "MSIS overshoots in extreme storms" headline is not supported: the overshoot is
+  May and Oct 2024, and the other severe storm (Jan 2025) goes the other way. A clean
+  baseline for the merged Oct storm (before its Oct 6 first dip) barely changes it
+  (+38.9 / `Y_total` +5.2), so Oct 2024's positive total effect is not a baseline artefact;
+  it awaits the full-cohort TLE-blur check.

@@ -52,13 +52,30 @@ def daily_precise_axis(precise, freq="D"):
     return data.rename("a_km_precise").reset_index()
 
 
-def orbit_averaged_precise_axis(precise, period_minutes=94.0):
+def estimate_orbit_period_minutes(precise, min_period_minutes=70.0, max_period_minutes=130.0):
+    """Estimate the revolution period from repeated radius minima."""
+    data = precise.sort_values("time").drop_duplicates("time")
+    if "radius_km" not in data or len(data) < 10:
+        raise ValueError("Need unique precise states with radius_km to estimate period")
+    radius = data["radius_km"].to_numpy()
+    times = data["time"].to_numpy()
+    minima = np.flatnonzero((radius[1:-1] <= radius[:-2]) & (radius[1:-1] < radius[2:])) + 1
+    gaps = np.diff(times[minima]).astype("timedelta64[s]").astype(float) / 60.0
+    gaps = gaps[(gaps >= min_period_minutes) & (gaps <= max_period_minutes)]
+    if not len(gaps):
+        raise ValueError("Could not identify a plausible orbital period")
+    return float(np.median(gaps))
+
+
+def orbit_averaged_precise_axis(precise, period_minutes=None):
     """Average precise osculating semi-major axis over one orbital period.
 
     A daily median still contains the within-orbit oscillation. Binning the 10 s
     states into successive orbital periods removes that oscillation before daily
     decay rates are computed.
     """
+    if period_minutes is None:
+        period_minutes = estimate_orbit_period_minutes(precise)
     if period_minutes <= 0:
         raise ValueError("period_minutes must be positive")
     data = precise.sort_values("time").copy()
@@ -140,4 +157,7 @@ def compare_tle_precise(tles, precise, smoothing_days=3):
 def load_orbit_files(paths):
     """Parse and concatenate multiple daily precise-orbit files."""
     frames = [parse_groops_orbit(Path(path)) for path in paths]
-    return pd.concat(frames, ignore_index=True).sort_values("time").reset_index(drop=True)
+    return (pd.concat(frames, ignore_index=True)
+            .drop_duplicates("time")
+            .sort_values("time")
+            .reset_index(drop=True))

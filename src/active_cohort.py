@@ -17,7 +17,12 @@ def build_active_intervals(records, storms, objects, **cleaning_kwargs):
     tles = tles_to_frame(records)
     cleaned, cleaning_report = clean_tle_history(tles, passive=False, **cleaning_kwargs)
     intervals, interval_report = build_decay_intervals(cleaned, storms, passive=False)
-    activity = classify_activity(objects[["norad_id", "object_type"]], intervals)
+    columns = ["norad_id", "object_type"]
+    if "object_name" in objects:
+        columns.append("object_name")
+    if "ops_status_code" in objects:
+        columns.append("ops_status_code")
+    activity = classify_activity(objects[columns], intervals)
     active_ids = activity.loc[activity["is_active"].eq(1), "norad_id"]
     active = intervals[intervals["norad_id"].isin(active_ids)].merge(
         activity[["norad_id", "is_active", "n_maneuvers"]], on="norad_id", how="left"

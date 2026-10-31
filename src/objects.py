@@ -319,6 +319,14 @@ def classify_activity(objects, intervals=None, **kwargs):
     and object_type. Debris and rocket bodies are passive; any other object is passive
     only if it has decay intervals and detect_maneuvers finds none in them."""
     out = objects.copy()
+    # Operational payloads are active even when continuous low-thrust station
+    # keeping produces no discrete semi-major-axis jump.
+    ops = out.get("ops_status_code", pd.Series(index=out.index, dtype="string"))
+    operational = ops.astype("string").str.strip().str.upper().isin({"+", "P", "B", "S", "X"})
+    # Space-Track snapshots do not always expose OPS_STATUS_CODE; Starlink's
+    # operator naming is an explicit low-thrust operational fallback.
+    names = out.get("object_name", pd.Series(index=out.index, dtype="string"))
+    operational = (operational | names.astype("string").str.upper().str.startswith("STARLINK")).fillna(False)
     out["maneuver_checked"] = 0
     out["n_maneuvers"] = 0
     if intervals is not None and len(intervals):
@@ -330,7 +338,7 @@ def classify_activity(objects, intervals=None, **kwargs):
         out["n_maneuvers"] = out["norad_id"].map(counts).fillna(0).astype("int64")
     by_type = out["object_type"].isin(PASSIVE_TYPES)
     quiet_payload = (out["maneuver_checked"] == 1) & (out["n_maneuvers"] == 0)
-    out["is_passive"] = (by_type | quiet_payload).astype("int64")
+    out["is_passive"] = (by_type | (quiet_payload & ~operational)).astype("int64")
     out["is_active"] = 1 - out["is_passive"]
     return out
 

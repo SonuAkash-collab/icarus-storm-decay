@@ -430,3 +430,52 @@ def plot_match_gap(passive, active, out_path=None):
     if out_path is not None:
         fig.savefig(out_path, dpi=150)
     return fig
+
+
+def plot_offset_model_storms(pairs, storms, pred="P", out_path=None):
+    """Observed vs predicted storm loss per storm (duck + recovery windows, summed over
+    active satellites, km). On the diagonal: offset 0 (no operator response); on y = 0:
+    offset 1 (nothing lost). pairs: offset_model pairs; pred: "P" or "Pc"."""
+    import numpy as np
+
+    per = pairs.groupby("storm_id")[["O_duck", "O_rec", f"{pred}_duck", f"{pred}_rec"]].sum() / 1000
+    per = per.join(storms.set_index("storm_id")[["class"]])
+    x, y = per[f"{pred}_duck"] + per[f"{pred}_rec"], per["O_duck"] + per["O_rec"]
+    fig, ax = plt.subplots(figsize=(6, 5))
+    lim = np.nanmax(np.abs(np.r_[x, y])) * 1.1
+    ax.plot([-lim, lim], [-lim, lim], color=WEATHER_COLOR, lw=0.8, ls="--", label="offset 0 (observed = predicted)")
+    ax.axhline(0, color=EVENT_COLOR, lw=0.8, ls=":", label="offset 1 (nothing lost)")
+    ax.scatter(x, y, s=30, color=DATA_COLOR)
+    for sid, xi, yi in zip(per.index, x, y):
+        ax.annotate(str(sid), (xi, yi), fontsize=7, xytext=(3, 3), textcoords="offset points")
+    ax.set_xlabel("predicted storm loss (km, summed over satellites)")
+    ax.set_ylabel("observed loss vs baseline (km)")
+    ax.legend(frameon=False, fontsize=8)
+    _clean_axes(ax)
+    fig.tight_layout()
+    if out_path is not None:
+        fig.savefig(out_path, dpi=150)
+    return fig
+
+
+def plot_offset_model_summary(summary, placebo, stat="offset_total", out_path=None):
+    """Forest plot of one offset statistic: every run of offset_model.run and the placebo,
+    with 95% CIs. summary / placebo: the stacked frames from offset_model.run."""
+    rows = [(f"{a} / {b}", r) for (a, b, s), r in summary.iterrows() if s == stat]
+    rows += [(f"placebo ({a}) / {b}", r) for (a, b, s), r in placebo.iterrows() if s == stat]
+    fig, ax = plt.subplots(figsize=(7, 0.45 * len(rows) + 1))
+    for i, (label, r) in enumerate(rows):
+        color = EVENT_COLOR if label.startswith("placebo") else DATA_COLOR
+        ax.errorbar(r["est"], i, xerr=[[r["est"] - r["ci_lo"]], [r["ci_hi"] - r["est"]]], fmt="o", ms=4,
+                    color=color, elinewidth=1)
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels([label for label, _ in rows], fontsize=8)
+    ax.invert_yaxis()
+    for v in (0, 1):
+        ax.axvline(v, color=WEATHER_COLOR, lw=0.6, ls=":")
+    ax.set_xlabel(f"{stat} (95% CI)")
+    _clean_axes(ax)
+    fig.tight_layout()
+    if out_path is not None:
+        fig.savefig(out_path, dpi=150)
+    return fig

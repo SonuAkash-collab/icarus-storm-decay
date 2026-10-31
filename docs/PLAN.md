@@ -168,8 +168,8 @@ synthetic data.
         rows); 5 fully excluded (SURCAL 150B + 4 Starlinks deorbiting all year).
   - [x] `causal_run` reports instead of failing when no active has a twin
         (`offset_ratio.match_diagnostics`, `offset_match_diagnostics.csv`).
-  - [ ] Offset ratio NOT estimable with the current passive pool (decision log, Oct 31):
-        needs passive twins near the Starlink shells or a twin-free counterfactual.
+  - [x] Twin offset ratio NOT estimable with the current passive pool (decision log, Oct 31);
+        replaced by the model-based offset ratio below.
 
 ## C: Siddhant Anil (event study and offset ratio, `causal-event-offset`)
 
@@ -222,6 +222,14 @@ synthetic data.
       0 by day 2; model error is -9 on day 0 and slightly positive on days 1-2.
 - [ ] **Real run, offset ratio**: waits for the active satellites to join the table
       (25 Starlink + 1 other); question 3 is then effectively about Starlink.
+- [x] **Model-based offset ratio** (branch `C-offset-model`, `src/offset_model.py`,
+      `notebooks/08_offset_model.ipynb`, in `python -m src.causal_run`): each active satellite vs
+      its own physics-predicted storm loss (MSIS 2.1 actual ap minus quiet ap, catalog-scaled B),
+      observed loss vs its own days -10..-3 baseline, ducking + 10-day recovery windows, all 20
+      storms, offset = 1 - observed / predicted, storm-clustered wild bootstrap (Webb). Passive
+      model-error correction by storm class x 100 km band; free-drag Starlink placebo with
+      own-fitted B; B-scale sensitivity. Rows in a 21-day window with > 1 km net altitude change
+      (orbit raises, shell changes) are left out. Result in the decision log (Oct 31).
 - [ ] **Paper**: intro, data/physics setup, DAG, event study, offset ratio. Draft
       written on synthetic results; real numbers go in from `results/causal/summary.md`.
 
@@ -420,3 +428,19 @@ synthetic data.
   `Y_residual` +0.15). Next: passive twins at 450-560 km and 40-56 deg (task A), or a
   twin-free counterfactual (the active's own catalog-B physics prediction); both are
   design changes for the team to decide.
+- **Oct 31, model-based offset ratio (Sonu)**: the twin design has no twins, so each active
+  satellite is its own control and MSIS 2.1 (actual minus quiet ap, catalog-scaled B) gives the
+  predicted storm loss. Decided before the numbers: all 20 storms, ratio of sums, Webb wild
+  bootstrap by storm, with / without May and Oct 2024, passive model-error correction by storm
+  class and altitude band. Added after a first run: rows in a 21-day window with > 1 km net altitude
+  change are dropped (orbit raises of STARLINK-30105 etc. swamped the recovery window by +-20-37 km),
+  and placebo satellites must decay at <= 1.5x the catalog free-drag rate (1010 / 1013 / 1015 /
+  30264 / 30277 are thrust down at 3-22x). **Result (21 Starlinks, 20 storms, 282 pairs): total
+  offset 1.19 (95% CI 0.97 to 1.42), corrected 1.18 (0.98 to 1.38), without May / Oct 2024 1.39
+  (0.89 to 1.92)**; ducking window 1.21 (1.09 to 1.34), ducking part 1.07, recovery part 0.12
+  (-0.10 to 0.33). B scale 0.75x / 1.25x: 1.25 / 1.15. Reading: Starlinks lose no more altitude
+  around storms than in their baseline, i.e. they undo the whole predicted loss, during the storm.
+  Placebo (11 free-drag Starlinks, own B): ducking 0.33 (CI -0.67 to 1.29), total 1.47 (CI -7.7 to
+  10.3, drifting baselines of deorbiting satellites): compatible with 0 but weak; with catalog B
+  ducking 0.65 (0.13 to 1.15), which shows that a wrong B scale fakes an offset. Caveats: one
+  operator, catalog B, overlapping windows (storm 3's recovery window holds May 10), weak placebo.

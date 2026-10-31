@@ -17,7 +17,8 @@ Each check is a way the DML estimate could be fooling us; each should come out a
    mean ap per interval and rerun. The estimates should centre on zero, with the real
    one in the tail.
 4. without_storms: drop the May and Oct 2024 storms (event_checks.key_storm_ids) and
-   rerun, so one superstorm cannot carry the result. Rows go if they are linked to a
+   rerun, so one superstorm cannot carry the result; lags_without_storms does the same
+   for the ap lag sweep (does the 12-24 h model-error pattern need those storms?). Rows go if they are linked to a
    dropped storm or overlap its active window (event_study.contamination_windows).
 5. planted_lag (synthetic only): rebuild the synthetic outcome so the storm acts on ap
    from PLANTED_LAG_HOURS earlier; dml.lag_sweep must then peak at that lag. This
@@ -120,6 +121,15 @@ def without_storms(df, outcome, storms, drop, n_boot=999, seed=0, **dml_kw):
     return pd.DataFrame(rows).T
 
 
+def lags_without_storms(df, outcome, hourly, storms, drop, n_boot=999, seed=0, **dml_kw):
+    """dml.lag_sweep with all storms and without the `drop` storms (same rule as
+    without_storms). Returns one DataFrame indexed by (sample, lag_hours)."""
+    sweeps = {"all storms": dml.lag_sweep(df, hourly, outcome, n_boot=n_boot, seed=seed, **dml_kw),
+              "without " + ",".join(map(str, drop)): dml.lag_sweep(drop_storm_rows(df, storms, drop), hourly,
+                                                                   outcome, n_boot=n_boot, seed=seed, **dml_kw)}
+    return pd.concat(sweeps, names=["sample"])
+
+
 def plant_lag(table, hourly, lag_hours=PLANTED_LAG_HOURS):
     """Synthetic only: the table with its storm effect moved onto ap from lag_hours earlier.
 
@@ -148,6 +158,7 @@ def run(table, storms, hourly, outcomes=None, n_shifts=20, n_boot=999, seed=0, o
             "random_cc": random_common_cause(df, y, base, n_boot=n_boot, seed=seed),
             "placebo": placebo_shifts(df, y, hourly, n_shifts=n_shifts, seed=seed),
             "without": without_storms(df, y, storms, key_storm_ids(storms), n_boot=n_boot, seed=seed),
+            "lags": lags_without_storms(df, y, hourly, storms, key_storm_ids(storms), n_boot=n_boot, seed=seed),
         }
     if out_dir is not None:
         write(out, Path(out_dir))
@@ -161,6 +172,7 @@ def write(out, out_dir):
         pd.DataFrame([r["random_cc"]]).to_csv(out_dir / f"refute_random_cc_{y}.csv", index=False)
         r["placebo"].to_csv(out_dir / f"refute_placebo_{y}.csv", index=False)
         r["without"].to_csv(out_dir / f"refute_without_{y}.csv")
+        r["lags"].to_csv(out_dir / f"refute_lags_without_{y}.csv")
     (out_dir / "refutations.md").write_text(summary_text(out), encoding="utf-8")
 
 
@@ -183,6 +195,9 @@ def summary_text(out):
                   f"share at least as large as the real estimate {beyond:.2f}"]
         for name, row in w.iterrows():
             lines.append(f"- {name}: {_ci(row)}, {int(row['n_rows']):,} rows")
+        lines += ["", "ap lag sweep with and without those storms:", "", "| sample | lag (h) | per nT |", "|---|---|---|"]
+        for (sample, lag), row in r["lags"].iterrows():
+            lines.append(f"| {sample} | {lag} | {_ci(row)} |")
         lines.append("")
     return "\n".join(lines)
 

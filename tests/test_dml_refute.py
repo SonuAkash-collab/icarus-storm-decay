@@ -80,6 +80,16 @@ def test_without_storms_reports_both(fake, df):
     assert (out["coef"].astype(float) < 0).all()
 
 
+def test_lags_without_storms(fake, df):
+    storms, hourly = fake[1], fake[2]
+    drop = storms["storm_id"].iloc[:3].tolist()
+    out = rf.lags_without_storms(df, Y, hourly, storms, drop, n_boot=0, **FAST)
+    samples = out.index.get_level_values("sample").unique().tolist()
+    assert samples == ["all storms", "without " + ",".join(map(str, drop))]
+    assert (out.xs(samples[1])["n_rows"] < out.xs(samples[0])["n_rows"]).all()
+    assert list(out.xs(samples[1]).index) == list(dml.LAGS_HOURS)
+
+
 def test_lag_sweep_finds_a_planted_12h_lag(fake):
     table, _, hourly = fake
     planted = rf.plant_lag(table, hourly, rf.PLANTED_LAG_HOURS)

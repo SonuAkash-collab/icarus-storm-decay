@@ -99,8 +99,10 @@ def compare_decay_rates(tles, precise, period_minutes=94.0, smoothing_days=1, ma
     """Compare daily TLE and orbit-averaged precise decay rates with a lag sweep."""
     tle = tles[["epoch", "a_km"]].rename(columns={"epoch": "time", "a_km": "a_km_tle"})
     tle["time"] = pd.to_datetime(tle["time"])
-    tle = tle.groupby(tle["time"].dt.floor("D"), as_index=False)["a_km_tle"].median()
-    tle = tle.rename(columns={"time": "time"})
+    # Materialize the day key before grouping; grouping by an unnamed Series can
+    # drop the time column on some pandas versions (KeyError: 'time' downstream).
+    tle["time"] = tle["time"].dt.floor("D")
+    tle = tle.groupby("time", as_index=False)["a_km_tle"].median()
     precise_axis = orbit_averaged_precise_axis(precise, period_minutes)
     precise_daily = daily_decay_rates(precise_axis, "a_km_precise", smoothing_days)
     tle_daily = daily_decay_rates(tle, "a_km_tle", smoothing_days)

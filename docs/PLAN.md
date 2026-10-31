@@ -336,11 +336,12 @@ synthetic data.
   (absent across the 20 storms, +1.2 m/day without May/Oct), and TLE blur in May 2024 (gone with
   3-day smoothing); Oct 2024 partly survives. So the headline is not "models recover too slowly";
   for the extreme storms add total altitude lost calm-day-before to calm-day-after.
-- **Oct 31, A7 precise-orbit follow-up (Piyush)**: added orbit-period (~94 min) averaging,
-  daily decay-rate comparison, and a ±3-day lag sweep. GRACE-FO-1 October 2024 has its
-  strongest agreement at zero lag (r = 0.70); Swarm-A is weaker (r = 0.21), so it is a
-  cross-check rather than a headline result. The existing May GRACE-FO check remains in
-  the validation set. Added the October comparison plot and removed the obsolete PR note.
+- **Oct 31, A7 precise-orbit follow-up (Piyush)**: added orbit-period averaging, daily
+  decay-rate comparison, and a ±3-day lag sweep. GRACE-FO-1 October 2024 has its
+  strongest agreement at zero lag (r = 0.70). For Swarm-A, the period is now estimated
+  from successive radius minima (93.83 min), duplicate timestamps across daily files are
+  removed, and states are re-averaged over actual revolutions; the alternating-sign
+  artifact is gone. Swarm remains a supporting cross-check pending review of the product.
 - **Oct 31, active-satellite intervals (Piyush)**: selected a coverage-balanced payload
   cohort (25 Starlink + 25 other payloads), detected station-keeping activity, and built
   cleaned decay intervals for the offset-ratio analysis. The local run found 14 active

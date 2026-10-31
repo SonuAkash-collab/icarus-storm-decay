@@ -99,6 +99,7 @@ def select_passive_cohort(
     min_snapshots=8,
     target_size=300,
     altitude_band_km=100,
+    object_types=None,
 ):
     """Rank a sampled set of Space-Track candidate snapshots into a cohort manifest.
 
@@ -114,7 +115,9 @@ def select_passive_cohort(
     """
     if min_snapshots < 1 or target_size < 1 or altitude_band_km <= 0:
         raise ValueError("min_snapshots, target_size and altitude_band_km must be positive")
-    passive_types = {"DEBRIS", "ROCKET BODY"}
+    accepted_types = {"DEBRIS", "ROCKET BODY"} if object_types is None else {
+        str(value).strip().upper() for value in object_types
+    }
     rows = []
     for sample_date, records in records_by_date.items():
         for record in records:
@@ -126,7 +129,7 @@ def select_passive_cohort(
                 apogee = float(record.get("APOAPSIS", record.get("APOGEE")))
             except (KeyError, TypeError, ValueError):
                 continue
-            if object_type not in passive_types:
+            if object_type not in accepted_types:
                 continue
             if ecc >= max_ecc or perigee < min_perigee or apogee > max_apogee:
                 continue
@@ -196,4 +199,11 @@ def select_passive_cohort(
         {"step": "selected", "count": int(manifest["selected"].sum())},
     ])
     return manifest, report
+
+
+def select_active_cohort(records_by_date, **kwargs):
+    """Select payload candidates with stable coverage for the offset-ratio track."""
+    kwargs = dict(kwargs)
+    kwargs["object_types"] = ("PAYLOAD",)
+    return select_passive_cohort(records_by_date, **kwargs)
 

@@ -7,7 +7,11 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src.precise_orbit import compare_tle_precise, parse_groops_orbit  # noqa: E402
+from src.precise_orbit import (  # noqa: E402
+    compare_decay_rates,
+    compare_tle_precise,
+    parse_groops_orbit,
+)
 
 
 def test_parse_groops_orbit_reads_mjd_position_and_velocity(tmp_path):
@@ -33,3 +37,18 @@ def test_compare_tle_precise_returns_trend_metrics():
     assert len(aligned) == 5
     assert summary.iloc[0]["centred_correlation"] > 0.99
     assert abs(summary.iloc[0]["slope_difference_km_per_day"]) < 1e-9
+
+
+def test_compare_decay_rates_returns_lag_sweep():
+    times = pd.date_range("2024-05-01", periods=96 * 5, freq="15min")
+    precise = pd.DataFrame({
+        "time": times,
+        "a_km_precise": 7000 - 0.5 * (times - times[0]).total_seconds() / 86400,
+    })
+    tles = pd.DataFrame({
+        "epoch": pd.date_range("2024-05-01", periods=5),
+        "a_km": [7000, 6999.5, 6999, 6998.5, 6998],
+    })
+    rates, lags = compare_decay_rates(tles, precise, period_minutes=94)
+    assert len(rates) >= 3
+    assert set(lags["lag_days"]) == set(range(-3, 4))

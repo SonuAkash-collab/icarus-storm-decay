@@ -37,6 +37,7 @@ synthetic data.
 | #19 | Residual validation: outlier filter, `Y_total`, TLE-blur check, notebook 04 |
 | B6 | Physics simulator (`src/simulate.py`) with a known storm boost (PR pending) |
 | B4-B5 | Cohort physics and the real analysis table (`src/build_table.py`, notebook 05; PR pending) |
+| review | First-review figure pack: `python -m src.review_figures` -> `results/review/` (7 figures + SUMMARY.md; PR pending) |
 
 ## A: Piyush (orbit data)
 

@@ -322,7 +322,7 @@ def plot_event_day_profile(profiles, title, ylabel, out_path=None):
     return fig
 
 
-def plot_event_study(result, title, ylabel="effect vs day -1 (m/day)", out_path=None):
+def plot_event_study(result, title, ylabel="effect vs day -1 (m/day)", out_path=None, ax=None):
     """Stacked event-study coefficients by event day with 95% wild-cluster-bootstrap CIs.
 
     result: event_study.event_study output (index k = days from main_onset, columns
@@ -332,7 +332,10 @@ def plot_event_study(result, title, ylabel="effect vs day -1 (m/day)", out_path=
     r = result.sort_index()
     ref = r.index[(r["coef"] == 0) & (r["ci_lo"] == 0) & (r["ci_hi"] == 0)]
     est = r.drop(index=ref)
-    fig, ax = plt.subplots(figsize=(10, 4))
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(10, 4))
+    else:
+        fig = ax.figure
     ax.axvspan(-0.5, 2.5, color=EVENT_COLOR, alpha=0.07, lw=0)
     ax.axhline(0, color=WEATHER_COLOR, lw=0.8)
     ax.axvline(0, color=EVENT_COLOR, lw=0.8, ls="--")
@@ -348,8 +351,8 @@ def plot_event_study(result, title, ylabel="effect vs day -1 (m/day)", out_path=
     ax.set_xticks(range(int(r.index.min()), int(r.index.max()) + 1, 2))
     ax.legend(frameon=False, fontsize=9, loc="lower right")
     _clean_axes(ax)
-    fig.tight_layout()
     if out_path is not None:
+        fig.tight_layout()
         fig.savefig(out_path, dpi=150)
     return fig
 
@@ -432,7 +435,7 @@ def plot_match_gap(passive, active, out_path=None):
     return fig
 
 
-def plot_offset_model_storms(pairs, storms, pred="P", out_path=None):
+def plot_offset_model_storms(pairs, storms, pred="P", out_path=None, ax=None):
     """Observed vs predicted storm loss per storm (duck + recovery windows, summed over
     active satellites, km). On the diagonal: offset 0 (no operator response); on y = 0:
     offset 1 (nothing lost). pairs: offset_model pairs; pred: "P" or "Pc"."""
@@ -441,7 +444,10 @@ def plot_offset_model_storms(pairs, storms, pred="P", out_path=None):
     per = pairs.groupby("storm_id")[["O_duck", "O_rec", f"{pred}_duck", f"{pred}_rec"]].sum() / 1000
     per = per.join(storms.set_index("storm_id")[["class"]])
     x, y = per[f"{pred}_duck"] + per[f"{pred}_rec"], per["O_duck"] + per["O_rec"]
-    fig, ax = plt.subplots(figsize=(6, 5))
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(6, 5))
+    else:
+        fig = ax.figure
     lim = np.nanmax(np.abs(np.r_[x, y])) * 1.1
     ax.plot([-lim, lim], [-lim, lim], color=WEATHER_COLOR, lw=0.8, ls="--", label="offset 0 (observed = predicted)")
     ax.axhline(0, color=EVENT_COLOR, lw=0.8, ls=":", label="offset 1 (nothing lost)")
@@ -452,8 +458,8 @@ def plot_offset_model_storms(pairs, storms, pred="P", out_path=None):
     ax.set_ylabel("observed loss vs baseline (km)")
     ax.legend(frameon=False, fontsize=8)
     _clean_axes(ax)
-    fig.tight_layout()
     if out_path is not None:
+        fig.tight_layout()
         fig.savefig(out_path, dpi=150)
     return fig
 

@@ -2,6 +2,7 @@
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+import numpy as np
 
 # Muted colors: one data color, gray for space weather, red-ish for the storm marker
 DATA_COLOR = "#2a78d6"
@@ -485,3 +486,120 @@ def plot_offset_model_summary(summary, placebo, stat="offset_total", out_path=No
     if out_path is not None:
         fig.savefig(out_path, dpi=150)
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Extreme-storm check (notebooks/09, src/extreme_check.py)
+# ---------------------------------------------------------------------------
+
+STORM_COLORS = ["#e34948", "#2a78d6", "#52514e", "#e8a33d"]   # one per key storm, in time order
+
+
+def _axes(ax, figsize):
+    if ax is None:
+        return plt.subplots(figsize=figsize)
+    return ax.figure, ax
+
+
+def _finish(fig, out_path):
+    if out_path is not None:
+        fig.tight_layout()
+        fig.savefig(out_path, dpi=150)
+    return fig
+
+
+def plot_storm_change_means(by_storm, storms, outcome, title, out_path=None, ax=None):
+    """Baseline-relative residual per storm (mean over objects, 95% CI over objects),
+    storms ordered by min Dst. by_storm: extreme_check.smoothing_check by_storm."""
+    d = by_storm.loc[outcome].join(storms.set_index("storm_id")[["min_dst", "class"]]).sort_values("min_dst")
+    fig, ax = _axes(ax, (12, 4))
+    x = np.arange(len(d))
+    ax.axhline(0, color=WEATHER_COLOR, lw=0.8)
+    ax.errorbar(x, d["mean"], yerr=[d["mean"] - d["ci_lo"], d["ci_hi"] - d["mean"]], fmt="o", ms=5,
+                color=DATA_COLOR, capsize=3)
+    ax.set_xticks(x, [f"{s}\n{m:.0f}" for s, m in zip(d.index, d["min_dst"])], fontsize=8)
+    ax.set_xlabel("storm id / min Dst (nT)")
+    ax.set_ylabel("days 0..+3 minus days -10..-3\n(m/day, > 0 = over-prediction)")
+    ax.set_title(title, loc="left", fontsize=12)
+    _clean_axes(ax)
+    return _finish(fig, out_path)
+
+
+def plot_extreme_smoothing(by_storm, names, out_path=None, ax=None):
+    """Days 0..+3 residual change of the key storms with the raw, NRLMSISE-00 and smoothed
+    predictions (mean over objects, 95% CI over objects)."""
+    outcomes = list(dict.fromkeys(by_storm.index.get_level_values("outcome")))
+    fig, ax = _axes(ax, (8, 4))
+    ax.axhline(0, color=WEATHER_COLOR, lw=0.8)
+    width = 0.8 / len(names)
+    for j, (sid, name) in enumerate(names.items()):
+        d = by_storm.xs(sid, level="storm_id").reindex(outcomes)
+        x = np.arange(len(outcomes)) + (j - (len(names) - 1) / 2) * width
+        ax.errorbar(x, d["mean"], yerr=[d["mean"] - d["ci_lo"], d["ci_hi"] - d["mean"]], fmt="o", ms=5,
+                    color=STORM_COLORS[j % len(STORM_COLORS)], capsize=3, label=name)
+    ax.set_xticks(range(len(outcomes)), [o.replace("MSIS 2.1 smoothed", "smoothed") for o in outcomes], fontsize=9)
+    ax.set_ylabel("residual, days 0..+3 minus -10..-3\n(m/day, > 0 = MSIS over-predicts)")
+    ax.set_title("TLE-blur check: post-storm residual vs smoothing", loc="left", fontsize=12)
+    ax.legend(frameon=False, fontsize=9)
+    _clean_axes(ax)
+    return _finish(fig, out_path)
+
+
+def plot_calm_cumulative(curves, names, out_path=None, ax=None):
+    """Running observed - predicted loss (m) from the calm day before, mean over objects
+    with a 95% band, one line per key storm (extreme_check.cumulative_residual). Dashed:
+    the storm's pre-storm model error (days -10..-3, m/day) carried on from the start, the
+    line the curve would follow if the storm added no model error."""
+    fig, ax = _axes(ax, (8, 4))
+    ax.axhline(0, color=WEATHER_COLOR, lw=0.8)
+    ax.axvline(0, color=EVENT_COLOR, lw=0.8, ls=":")
+    for j, (sid, name) in enumerate(names.items()):
+        c, color = curves[sid], STORM_COLORS[j % len(STORM_COLORS)]
+        ax.plot(c.index, c["mean"], color=color, lw=1.6, label=name)
+        ax.fill_between(c.index, c["mean"] - 1.96 * c["se"], c["mean"] + 1.96 * c["se"], color=color, alpha=0.15, lw=0)
+        if "pre_slope" in c.attrs:
+            x = np.array([c.attrs["t0_day"], c.index.max()])
+            ax.plot(x, c.attrs["pre_slope"] * (x - x[0]), color=color, lw=1, ls="--")
+    ax.set_xlabel("days from main_onset")
+    ax.set_ylabel("cumulative observed - MSIS 2.1 (m)\n> 0 = less loss than predicted")
+    ax.set_title("Calm-to-calm: running model error (dashed: pre-storm error)", loc="left", fontsize=12)
+    ax.legend(frameon=False, fontsize=9, loc="upper left")
+    _clean_axes(ax)
+    return _finish(fig, out_path)
+
+
+def plot_calm_summary(rows, labels, out_path=None, ax=None, title="Calm-to-calm loss, observed - MSIS 2.1"):
+    """Calm-to-calm difference (m) with 95% CIs for the rows of a calm_summary table, three
+    versions: raw, minus the pre-storm error (days -10..-3) and minus the +-30-day quiet
+    error. labels: one text per row (y axis, top to bottom)."""
+    fig, ax = _axes(ax, (8, 0.5 * len(rows) + 1.5))
+    y = np.arange(len(rows))[::-1]
+    ax.axvline(0, color=WEATHER_COLOR, lw=0.8)
+    for k, (col, lo, hi, name, color) in enumerate([
+            ("diff_m", "diff_lo", "diff_hi", "raw", "#b5b3ad"),
+            ("diff_adj_m", "adj_lo", "adj_hi", "minus pre-storm error", DATA_COLOR),
+            ("diff_quiet_m", "quiet_lo", "quiet_hi", "minus +-30-day quiet error", EVENT_COLOR)]):
+        yy = y + (1 - k) * 0.22
+        ax.errorbar(rows[col], yy, xerr=[rows[col] - rows[lo], rows[hi] - rows[col]], fmt="o", ms=5,
+                    color=color, capsize=3, label=name)
+    ax.set_yticks(y, labels, fontsize=9)
+    ax.set_xlabel("metres over the span (> 0 = MSIS over-predicts the loss)")
+    ax.set_title(title, loc="left", fontsize=12)
+    ax.legend(frameon=False, fontsize=8, loc="lower right")
+    _clean_axes(ax)
+    return _finish(fig, out_path)
+
+
+def plot_lag_check(lags, out_path=None, ax=None):
+    """Mean over objects of corr(observed, shifted prediction) by lag, 95% band."""
+    fig, ax = _axes(ax, (7, 3.5))
+    ax.plot(lags.index, lags["mean"], marker="o", ms=3, color=DATA_COLOR)
+    ax.fill_between(lags.index, lags["mean"] - 1.96 * lags["se"], lags["mean"] + 1.96 * lags["se"],
+                    color=DATA_COLOR, alpha=0.15, lw=0)
+    best = lags["mean"].idxmax()
+    ax.axvline(best, color=WEATHER_COLOR, lw=0.8, ls="--")
+    ax.set_xlabel("lag of the prediction (h; < 0 = prediction taken later)")
+    ax.set_ylabel("corr(observed, predicted)")
+    ax.set_title(f"Lag check ({int(lags['objects'].iloc[0])} objects): best {best:+d} h", loc="left", fontsize=12)
+    _clean_axes(ax)
+    return _finish(fig, out_path)

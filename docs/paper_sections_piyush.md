@@ -14,12 +14,12 @@ event is the strongest event in the window, with a minimum Dst of approximately 
 
 The main sample contains 250 passive objects between 400 and 800 km altitude. We selected
 objects with coverage on at least eight of nine Space-Track snapshot dates and allocated
-the sample across 100-km altitude bands rather than selecting by NORAD number. Debris and
-rocket bodies form the passive sample because they cannot actively correct their orbit.
-We additionally retain 15 objects at 1,000–1,500 km as a high-altitude negative-control
-group. The processed passive table contains 265 objects and 199,580 adjacent TLE
-intervals in the first complete real-data build; the later cleaned download contains
-203,954 deduplicated TLE states and 198,388 usable intervals after the revised checks.
+the sample across 100-km altitude bands rather than selecting by NORAD number. The four
+main altitude bands contain 39, 63, 82, and 66 objects. Debris and rocket bodies form
+the passive sample because they cannot actively correct their orbit. We additionally
+retain 15 objects in the observed 1,040–1,211 km range as a high-altitude negative-control
+group. The first complete download contains 205,145 deduplicated TLE states and 199,580
+adjacent intervals: 188,560 in the main sample and 11,020 in the high-altitude group.
 
 Active payloads are analysed separately for the operator-offset question. The active
 cohort contains 25 Starlink satellites and 25 other payloads selected using the same
@@ -41,17 +41,28 @@ For each object, adjacent cleaned states define an interval. We reject states ou
 the eccentricity and altitude bounds, cross-tag discontinuities, and endpoint failures
 identified by the TLE consistency checks. We omit intervals spanning more than five days
 and intervals that cross a storm onset, because neither interval can be assigned a clean
-pre- or post-onset exposure. In the revised passive run, seven long gaps and 5,294
-onset-bridging intervals were omitted.
+pre- or post-onset exposure. The cross-tag and rolling-median checks flagged zero objects.
+In the first download, 5,300 onset-bridging intervals were omitted.
 
 TLE noise can create a small apparent rise in semi-major axis. We therefore estimate
-object-specific robust noise from local median absolute deviations and flag a climb only
-when the rise exceeds both a minimum floor and approximately three times the estimated
-TLE noise. The flagged climb is retained as a diagnostic rather than automatically
-discarding the surrounding record. The revised rule flagged 416 passive intervals; a
-tighter point-level diagnostic flagged 15 TLE states (0.0074%), which we report as a
-sensitivity check. This distinction matters because deleting only upward observations
-would mechanically make decay appear faster.
+object-specific robust noise from local median absolute deviations and retain the result
+as `climb_flag`; climbs remain in the final analysis table. The separate outlier step is
+a Hampel filter on the MSIS 2.1 residual, with a five-day window and k = 3.5. It marks
+11,005 passive intervals (5.5%) as `tle_ok = 0`. Dropping climb intervals changes the
+short-run storm effect from −14.1 to −14.6 m/day, so the main table keeps climbs rather
+than deleting upward observations alone.
+
+The main cleaning counts are:
+
+| Cleaning step | Rows or objects affected | Treatment |
+|---|---:|---|
+| Deduplicated TLE states | 205,145 states retained | Keep the latest re-issued state |
+| Storm-onset bridge check | 5,300 intervals | Drop from interval analysis |
+| Gap check (>5 days) | 0 in the first run | Drop any qualifying interval |
+| Cross-tag check | 0 objects flagged | No object removed |
+| Rolling-median check | 0 objects flagged | No object removed |
+| Climb diagnostic | 4,705 intervals flagged | Keep, record `climb_flag` |
+| Hampel MSIS-residual filter | 11,005 passive intervals (5.5%) | Set `tle_ok = 0` |
 
 For each retained interval, the outcome is the change in semi-major axis divided by the
 elapsed time, expressed in metres per day. Negative values indicate that the object is
@@ -73,10 +84,11 @@ revolution averages are formed.
 The October 2024 GRACE-FO comparison provides the clearest validation: the TLE and
 precise daily decay-rate series peak on the same day, with a zero-lag correlation of
 approximately 0.70 and similar storm-day magnitude (about −0.10 versus −0.12 km/day).
-This indicates that TLEs capture the timing and most of the size of the storm decay,
-with a modest peak underestimate. The earlier May 2024 level comparison gives a centred
-correlation of 0.907, centred RMSE of 0.097 km, and a slope difference of 0.0025 km/day
-after removing the mean-element versus osculating-element level offset.
+This October decay-rate comparison is the main validation result: TLEs capture the timing
+and most of the size of storm decay, with a modest peak underestimate. The earlier May
+2024 result is a separate semi-major-axis level comparison over 19 days. It gives a
+centred correlation of 0.907, centred RMSE of 0.097 km, and a slope difference of
+0.0025 km/day after removing the mean-element versus osculating-element level offset.
 
 After revolution-based averaging and duplicate removal, Swarm-A no longer shows the
 alternating-sign daily pattern produced by drifting fixed bins. Its zero-lag decay-rate

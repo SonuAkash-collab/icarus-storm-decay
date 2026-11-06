@@ -39,10 +39,11 @@ records from creating artificial zero-length or very short decay intervals.
 
 For each object, adjacent cleaned states define an interval. We reject states outside
 the eccentricity and altitude bounds, cross-tag discontinuities, and endpoint failures
-identified by the TLE consistency checks. We omit intervals spanning more than five days
-and intervals that cross a storm onset, because neither interval can be assigned a clean
-pre- or post-onset exposure. The cross-tag and rolling-median checks flagged zero objects.
-In the first download, 5,300 onset-bridging intervals were omitted.
+identified by the TLE consistency checks. We omit intervals that cross a storm onset,
+because neither interval can be assigned a clean pre- or post-onset exposure. The first
+run retained four intervals longer than five days, with a maximum gap of 7.1 days; these
+are reported rather than silently removed. The cross-tag and rolling-median checks
+flagged zero objects. In the first download, 5,300 onset-bridging intervals were omitted.
 
 TLE noise can create a small apparent rise in semi-major axis. We therefore estimate
 object-specific robust noise from local median absolute deviations and retain the result
@@ -58,7 +59,7 @@ The main cleaning counts are:
 |---|---:|---|
 | Deduplicated TLE states | 205,145 states retained | Keep the latest re-issued state |
 | Storm-onset bridge check | 5,300 intervals | Drop from interval analysis |
-| Gap check (>5 days) | 0 in the first run | Drop any qualifying interval |
+| Gap check (>5 days) | 4 intervals retained (maximum 7.1 days) | Report, do not silently remove |
 | Cross-tag check | 0 objects flagged | No object removed |
 | Rolling-median check | 0 objects flagged | No object removed |
 | Climb diagnostic | 4,705 intervals flagged | Keep, record `climb_flag` |

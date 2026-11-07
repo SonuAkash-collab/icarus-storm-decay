@@ -266,12 +266,14 @@ synthetic data.
   - Status: passes in both synthetic worlds (selection in the loop, true-leftover-ap
     target): linear 48/50, curved 49/50. Real run done (`python -m src.dml_run`, results
     in the decision log, Oct 31); its checks are the refutations below.
-- [ ] **Refutations** (`src/dml_refute.py`, real run Oct 31, decision log): high-altitude group (>1,000 km) shows no effect, tested as
+- [x] **Refutations** (`src/dml_refute.py`, real run Oct 31, decision log): high-altitude group (>1,000 km) shows no effect, tested as
       equivalence (CI inside a pre-set band around zero), not just "not significant";
       it also catches storm-time TLE noise posing as decay. Random common cause leaves
       the estimate unchanged; shuffled storm timing gives zero; with and without
       May/Oct 2024.
-- [ ] **Vulnerability map** (`src/vulnerability_map.py`): CausalForestDML by altitude x
+- [x] **Model error by storm class** (`src/storm_class.py`, #40): per-storm change with an exact
+      permutation test (Oct 31) and the same in DML, per-class final slopes (Nov 7); decision log.
+- [x] **Vulnerability map** (`src/vulnerability_map.py`, real run Oct 31, decision log): CausalForestDML by altitude x
       inclination x `drag_sensitivity`, heatmap and feature importance. Must recover
       the planted differences on synthetic data and be stable across 5 seeds.
 - [ ] **Paper**: DML method, refutations, vulnerability map, discussion/limitations,
@@ -505,6 +507,7 @@ synthetic data.
   | High-altitude control (15 objects) | -0.023 (CI -0.026 to -0.021): inside +-0.196, PASS; ~6% of the main effect, not exactly 0 | -0.009 (CI -0.013 to -0.006); no band (main covers 0) |
   | Random common cause | moved -0.02 SE | moved +0.08 SE |
   | Shuffled storm timing (20) | mean -0.003, SD 0.031; none as large as the real | mean -0.007, SD 0.025; none as large |
+  | Shuffled storm timing, frozen run (100, Nov 7) | mean +0.004, SD 0.028, max abs 0.091; **placebo p = 0.010** (0 of 100 as large) | mean +0.004, SD 0.025, max abs 0.083; placebo p = 0.040 (3 of 100 as large); the bootstrap CI covers 0, so borderline, not claimed |
   | Without May / Oct 2024 (storms 3, 4, 11) | -0.511 (CI -0.648 to -0.375) | -0.159 (CI -0.273 to -0.050) |
   | Lag 0 / 6 / 12 / 24 h without them | (not rerun) | -0.15 / -0.11 / 0.00 / +0.05 (12-24 h CIs cover 0) |
 
@@ -529,7 +532,25 @@ synthetic data.
   This agrees with the extreme-storm check (Sonu, Oct 31): Oct 2024 is a real overshoot,
   May 2024 a timing error, Dec 2024 an under-prediction, i.e. storm-specific errors and no
   general model error by storm size.
-  **In DML** (`storm_class.dml_by_class`): one first stage on the whole main sample, final
+- **Oct 31, vulnerability map (Holla)**: `python -m src.vulnerability_map`, CausalForestDML
+  (400 trees, min 50 rows per leaf), modifiers altitude / inclination / drag_sensitivity,
+  controls F10.7, F10.7 81-day, season, local time; helper models by the DML rule;
+  storm-blocked folds. Synthetic check (PLAN pass bar): per-object correlation with the
+  planted effect 0.925, inclination importance 0.005 (planted none), average effect
+  -0.0187 = planted, 5-seed map correlation > 0.9. Outcome for the real map is `Y_total`
+  (question 2 asks who is hit hardest; PLAN did not name one), `Y_residual` second. Real
+  `Y_total`: importance drag sensitivity 0.89, altitude 0.11, inclination 0.005; 5-seed map
+  correlation >= 0.996. Hardest hit: high drag sensitivity at 600-700 km, about -2.5 to
+  -3.4 m/day per nT (objects 4193, 13486, 233, 407, 13487), against about -0.05 for compact
+  objects above 700 km; forest average -0.46 per nT (an unweighted row average, so not
+  the same number as the DML estimate). Figure `results/vulnerability_map_Y_total.png`
+  greys out cells with fewer than 3 objects nearby (111 of 189): the cohort has no object
+  below 550 km with drag sensitivity above 0.08, so that corner would be extrapolation.
+  Real `Y_residual` map is not stable (5-seed correlation down to 0.62, below the 0.9 bar)
+  and is not interpreted. Caveat: the forest's own intervals treat rows as independent,
+  so they are too narrow with 20 storms; read the map for its pattern, the effect size
+  from DML.
+- **Nov 7, model error by storm class in DML (Holla)**: `storm_class.dml_by_class`, one first stage on the whole main sample, final
   slope of the leftovers per class over the rows of that class's storms, storm-clustered
   wild bootstrap for >= 3 storms, exact permutation over the 1,140 storm splits for big vs
   rest. Per nT of ap: `Y_residual` moderate -0.140 (CI -0.260 to -0.013), strong -0.208

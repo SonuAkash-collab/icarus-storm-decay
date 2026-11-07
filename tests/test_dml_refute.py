@@ -95,3 +95,12 @@ def test_lag_sweep_finds_a_planted_12h_lag(fake):
     planted = rf.plant_lag(table, hourly, rf.PLANTED_LAG_HOURS)
     sweep = dml.lag_sweep(dml.prepare(planted, Y), hourly, Y, n_boot=0, **FAST)
     assert sweep["coef"].astype(float).abs().idxmax() == rf.PLANTED_LAG_HOURS
+
+
+def test_placebo_p_counts_the_real_estimate():
+    import pandas as pd
+
+    placebo = pd.DataFrame({"coef": [0.0] * 99 + [-0.5]})
+    assert rf.placebo_p(placebo, -0.4) == pytest.approx(2 / 101)
+    assert rf.placebo_p(placebo.iloc[:99], -0.4) == pytest.approx(1 / 100)
+    assert rf.N_SHIFTS == 100

@@ -563,3 +563,22 @@ synthetic data.
   difference to the rest is not significant at storm level. Synthetic check: the planted
   per-nT effect is the same in every class and DML-by-class recovers it in each (within
   25%), with no significant big-vs-rest gap.
+- **Nov 7, model-based offset ratio: overlapping storms and quiet ap (Siddhant Anil)**: review
+  before the freeze found two problems with all 20 storms in play. (1) Windows overlapped: the
+  May 2 storm's recovery window held ~16 km of the May 10 superstorm's predicted loss again, and
+  rows are linked to the nearest main_onset, so 15 of the 77 km of predicted loss used another
+  storm's quiet ap. Now each storm's ducking / recovery windows end at the next storm's
+  main_onset and rows linked to another storm get no predicted loss (`own_rows`, default on).
+  (2) The quiet ap (median over days -10..-3) is 12-22 for storms 10, 15, 16, 17, 19, 20 (an
+  earlier storm in that window) vs 5-9 elsewhere: a new run drops storms whose quiet ap is over
+  1.5x the storm-free median (`noisy_quiet_storms`, needs spaceweather.parquet). The real fix is
+  a storm-free quiet ap in `physics.quiet_ap_drivers`, which needs the drivers rebuilt; not done.
+  **Result: total 1.19 (CI 0.77 to 1.64), corrected 1.17 (0.98 to 1.36), without May / Oct 2024
+  1.27 (1.08 to 1.46), quiet-ap storms only (14) 1.17 (1.05 to 1.29)**; ducking window 1.21
+  (1.10 to 1.34), ducking part 1.23, recovery part -0.04 (-0.47 to 0.38). The old recovery part
+  (0.12) was mostly the double-counted superstorm. The uncorrected CI widened because storms 10,
+  12 and 20 have a positive predicted loss in their recovery windows (actual ap below a disturbed
+  quiet ap). Values above 1 are not noise (storm-free dates: -1 +- 29 m per satellite over 3
+  days; big storms +80 to +160 m): overshooting thrust or a TLE mean-element artifact, read as
+  "at least a full offset". Checked: the free-drag and orbit-change screens (both defined from
+  observed altitude) drop deorbits and orbit raises, not uncompensated storm losses.

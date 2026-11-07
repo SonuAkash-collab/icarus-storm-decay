@@ -172,3 +172,29 @@ def test_run_with_and_without_key_storms():
     assert s.index.get_level_values("storms").nunique() == 2
     assert s.loc[("all storms", "uncorrected", "offset_total"), "est"] == pytest.approx(0.7, abs=1e-6)
     assert not out["placebo"].empty and set(out["b_sensitivity"].columns) == {0.75, 1.25}
+
+
+def test_overlapping_storms_count_each_loss_once():
+    # Storm 2 starts 6 days after storm 1, inside storm 1's recovery window: its predicted
+    # loss must count for storm 2 only (storm 1's windows end at storm 2's main_onset).
+    from src.schema import link_storms
+    storms = fake_storms(n=4, gap=6)
+    table = fake_table(storms, duck=0.0, n_passive=0)
+    table["storm_id"] = link_storms(table["t_start"], table["t_end"], storms)["storm_id"].to_numpy()
+    pairs = om.storm_pairs(om.active_rows(table), storms)
+    per_object = (pairs["P_duck"] + pairs["P_rec"]).groupby(pairs["norad_id"]).sum()
+    assert np.allclose(per_object, S_DUCK * 2 * len(storms))      # 2 ducking days per storm
+    old = om.storm_pairs(om.active_rows(table), storms, own_rows=False)
+    assert (old["P_duck"] + old["P_rec"]).groupby(old["norad_id"]).sum().lt(per_object - 1).all()
+
+
+def test_noisy_quiet_storms():
+    storms = fake_storms()
+    t = pd.date_range(START, periods=N_DAYS * 24, freq="h")
+    sw = pd.DataFrame({"ap": 5.0}, index=t)
+    onset = storms.loc[storms["storm_id"] == 3, "main_onset"].iloc[0]
+    sw.loc[onset - pd.Timedelta(days=10):onset - pd.Timedelta(days=3), "ap"] = 40.0
+    assert om.noisy_quiet_storms(storms, sw) == [3]
+    out = om.run(fake_table(storms, 0.5), storms, n_boot=0, sw=sw)
+    assert out["noisy_quiet"] == [3]
+    assert "quiet ap (without 3)" in set(out["summary"].index.get_level_values("storms"))

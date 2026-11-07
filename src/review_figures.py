@@ -1,8 +1,9 @@
-"""Figure pack for the first review: seven figures and SUMMARY.md in results/review/.
+"""Figure pack for the first review: eight figures and SUMMARY.md in results/review/.
 
     python -m src.review_figures
 
-Needs data/processed/{analysis_table, storms, spaceweather}.parquet, objects.parquet and
+Needs data/processed/{analysis_table, storms, spaceweather}.parquet, objects.parquet, the
+cleaned cohort TLEs (fig 8, src/extreme_check.py) and
 the track C outputs in results/causal (python -m src.causal_run). Each figure function
 takes plain frames and returns (figure, key numbers); the key numbers feed SUMMARY.md, so
 the summary is never typed by hand. Existing plotting code in src/plots.py is reused.
@@ -21,7 +22,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from src import physics, plots
+from src import extreme_check, physics, plots
 from src.objects import compare_drag
 from src.schema import main_sample
 
@@ -338,8 +339,104 @@ def fig_offset(storms, causal_dir=CAUSAL):
 
 
 # ---------------------------------------------------------------------------
+# 8. Extreme-storm check (src/extreme_check.py, notebooks/09)
+# ---------------------------------------------------------------------------
+
+def extreme_numbers(out):
+    """Key numbers of extreme_check.run for SUMMARY.md, keyed by storm name (e.g. 'May 2024')."""
+    smooth = f"MSIS 2.1 smoothed {max(extreme_check.SMOOTH_DAYS)} d"
+    calm = out["tables"][0]
+    tri = lambda r, c, lo, hi: (r[c], r[lo], r[hi])     # noqa: E731
+    storms = {}
+    for sid, name in out["names"].items():
+        short = name.split(" (")[0]
+        c = calm["storm"].loc[sid]
+        alt = calm["storm_alt"][calm["storm_alt"]["storm_id"] == sid]
+        storms[short] = {
+            "class": name.split("(")[1].rstrip(")"),
+            "raw": tri(out["by_storm"].loc[("MSIS 2.1", sid)], "mean", "ci_lo", "ci_hi"),
+            "smooth": tri(out["by_storm"].loc[(smooth, sid)], "mean", "ci_lo", "ci_hi"),
+            "ratio": tri(c, "ratio", "ratio_lo", "ratio_hi"),
+            "diff": tri(c, "diff_m", "diff_lo", "diff_hi"),
+            "adj": tri(c, "diff_adj_m", "adj_lo", "adj_hi"),
+            "quiet": tri(c, "diff_quiet_m", "quiet_lo", "quiet_hi"),
+            "alt_ratio": (alt["ratio"].min(), alt["ratio"].max()),
+            "label": out["labels"][sid]}
+    pooled = out["pooled"]
+    lags = out["lags"]["mean"]
+    high = out["high_summary"]
+    used = out["calm"][0]["storm_id"].nunique()
+    return {"storms": storms, "verdict": out["verdict"], "objects": out["n_objects"],
+            "all": tri(pooled.loc[("MSIS 2.1", "all storms")], "mean", "ci_lo", "ci_hi"),
+            "without": tri(pooled.loc[("MSIS 2.1", "without May/Oct 2024")], "mean", "ci_lo", "ci_hi"),
+            "all_s3": tri(pooled.loc[(smooth, "all storms")], "mean", "ci_lo", "ci_hi"),
+            "best_lag": int(lags.idxmax()), "lag_gain": lags.max() - lags.loc[0],
+            "calm_storms": used, "n_storms": len(out["by_storm"].loc["MSIS 2.1"]),
+            "high_quiet": (high["diff_quiet_m"].abs().max(), high["quiet_lo"].min(), high["quiet_hi"].max()),
+            "sens_ratio": {e: out["tables"][e]["storm"]["ratio"].round(2).tolist() for e in extreme_check.EXTRA_DAYS}}
+
+
+def fig_extreme_check(out):
+    """Three panels: days 0..+3 residual change vs smoothing, running calm-to-calm model
+    error, calm-to-calm difference for the key storms and the moderate / strong classes."""
+    names = out["names"]
+    fig, axes = plt.subplots(1, 3, figsize=(19, 5.2), gridspec_kw={"width_ratios": [1.1, 1.1, 1]})
+    plots.plot_extreme_smoothing(out["by_storm"], names, ax=axes[0])
+    plots.plot_calm_cumulative(out["curves"], names, ax=axes[1])
+    calm = out["tables"][0]
+    rows = pd.concat([calm["storm"].set_index("storm"),
+                      calm["class"].loc[["moderate", "strong"]].rename(index=lambda c: f"all {c}")])
+    labels = [i if not i.startswith("all") else f"{i} ({int(r.n_storms)} storms)" for i, r in rows.iterrows()]
+    plots.plot_calm_summary(rows, labels, ax=axes[2], title="Calm-to-calm loss, obs - MSIS 2.1 (95% CI)")
+    axes[0].set_title("A. Days 0..+3 residual vs smoothing", loc="left", fontsize=12)
+    axes[1].set_title("B. Running obs - pred from the calm day before", loc="left", fontsize=12)
+    axes[2].set_title("C. Calm day before to calm day after", loc="left", fontsize=12)
+    fig.suptitle(f"Extreme-storm check, {out['n_objects']} passive objects. Verdict: {out['verdict']}",
+                 x=0.01, ha="left", fontsize=12)
+    fig.tight_layout()
+    return fig, extreme_numbers(out)
+
+
+# ---------------------------------------------------------------------------
 # Summary and driver
 # ---------------------------------------------------------------------------
+
+def _ci(t, unit="", digits=1):
+    return f"{t[0]:+.{digits}f}{unit} (95% CI {t[1]:+.{digits}f} to {t[2]:+.{digits}f})"
+
+
+def headline_text(n):
+    """The Headline section: event study, all-storm model error and the fig 8 verdict."""
+    x = n["extreme"]
+    may, oct_, dec = (x["storms"][k] for k in ("May 2024", "Oct 2024", "Dec 2024"))
+    r = lambda t: f"{t[0]:.2f} (95% CI {t[1]:.2f} to {t[2]:.2f})"     # noqa: E731
+    m = lambda t: f"{t[0]:+.0f} m (95% CI {t[1]:+.0f} to {t[2]:+.0f})"  # noqa: E731
+    return [
+        "## Headline",
+        "",
+        f"- Storms cause extra decay beyond what a quiet-ap atmosphere would give: total storm effect, "
+        f"days 0-2, {_ci(n['event']['Y_total'], ' m/day')}.",
+        f"- MSIS 2.1 has no general post-storm error: event-study model error {_ci(n['event']['Y_residual'], ' m/day')}; "
+        f"days 0..+3 change across all {x['n_storms']} storms {_ci(x['all'], ' m/day')}, "
+        f"{_ci(x['without'], ' m/day')} without May/Oct 2024.",
+        f"- Extreme storms ({x['objects']} objects, fig 8), verdict: **{x['verdict']}**.",
+        f"  - Oct 2024 ({oct_['class']}): a real model overshoot. The days 0..+3 over-prediction survives 3-day "
+        f"smoothing ({_ci(oct_['smooth'], ' m/day')}) and MSIS also predicts more altitude loss than observed from a "
+        f"calm day before to a calm day after: observed / predicted {r(oct_['ratio'])}, {m(oct_['quiet'])} after "
+        f"removing the model's local quiet error, in every altitude band (ratio "
+        f"{oct_['alt_ratio'][0]:.2f}-{oct_['alt_ratio'][1]:.2f}).",
+        f"  - May 2024 ({may['class']}): a timing error, not an overshoot of the total. The days 0..+3 excess survives "
+        f"smoothing ({_ci(may['smooth'], ' m/day')}), but the calm-to-calm loss is not over-predicted once the "
+        f"model's own error is removed: {m(may['quiet'])} against its +-30-day quiet error, {m(may['adj'])} against "
+        f"its pre-storm error (raw observed / predicted {may['ratio'][0]:.2f}; MSIS already over-predicted the decay "
+        f"before the storm).",
+        f"  - Dec 2024 ({dec['class']}): the opposite, MSIS under-predicts the loss (observed / predicted "
+        f"{r(dec['ratio'])}).",
+        "- So the headline is not \"models recover too slowly after storms\": MSIS 2.1 errors in the largest storms "
+        "are storm-specific, and only Oct 2024 shows a real overshoot.",
+        "",
+    ]
+
 
 def summary_text(n):
     cs = n["class"]
@@ -347,11 +444,17 @@ def summary_text(n):
     f = lambda t: f"{t[0]:+.1f} m/day (95% CI {t[1]:+.1f} to {t[2]:+.1f})"
     o = n["offset"]
     g = lambda t: f"{t[0]:.2f} (95% CI {t[1]:.2f} to {t[2]:.2f})"
+    x = n["extreme"]
+    may, oct_, dec = (x["storms"][k] for k in ("May 2024", "Oct 2024", "Dec 2024"))
+    sens = "; ".join(f"+{e} d {'/'.join(f'{v:.2f}' for v in r)}" for e, r in x["sens_ratio"].items())
     return "\n".join([
         "# Review figure pack",
         "",
         "Made by `python -m src.review_figures` from the analysis table and results/causal. "
         "One line per figure with its key number.",
+        "",
+        *headline_text(n),
+        "## Figures",
         "",
         f"1. `fig1_may2024_cohort.png`: the median decay rate of {n['may']['objects']} passive objects goes from "
         f"{n['may']['before']:.0f} m/day (3 days before main_onset) to {n['may']['after']:.0f} m/day "
@@ -369,14 +472,30 @@ def summary_text(n):
         + f" m/day (storms in brackets). Extreme (one storm, CI over objects) {ext['mean']:+.1f} "
         f"[{ext['ci_lo']:+.1f}, {ext['ci_hi']:+.1f}]; severe (two storms, CI over objects) {sev['mean']:+.1f} "
         f"[{sev['ci_lo']:+.1f}, {sev['ci_hi']:+.1f}], but the two severe storms disagree "
-        f"({cs.attrs['severe_storms'][0]:+.1f} and {cs.attrs['severe_storms'][1]:+.1f}). Positive = MSIS predicts more decay than observed; "
-        "caveat from notebook 04: the May 2024 value vanishes with 3-day smoothing (TLE blur).",
+        f"({cs.attrs['severe_storms'][0]:+.1f} and {cs.attrs['severe_storms'][1]:+.1f}). Positive = MSIS predicts more decay than observed. "
+        f"Caveat (fig 8): on the full cohort the May 2024 value does not vanish with 3-day smoothing "
+        f"({may['smooth'][0]:+.1f} m/day), but it is a timing error, not an overshoot of the storm's total loss; "
+        f"of the two severe storms only Oct 2024 is a real overshoot, Dec 2024 is an under-prediction.",
         f"6. `fig6_validation.png`: GRACE-FO-1 Oct 2024 TLE vs precise decay rate r = {n['valid']['grace_r']:.2f} "
         f"(Piyush's A7 result; the left panel is cut from his saved figure); fitted vs catalog drag of rocket bodies "
         f"Spearman rho = {n['valid']['rho']:.2f} (n = {n['valid']['n']}).",
         f"7. `fig7_operator_offset.png`: Starlink total offset {g(o['offset_total'])}, of which ducking part "
         f"{g(o['duck_part'])} and recovery part {g(o['rec_part'])}; "
         f"observed loss is smaller than predicted in {n['offset_storms'][0]} of {n['offset_storms'][1]} storms.",
+        f"8. `fig8_extreme_check.png`: does the extreme-storm over-prediction survive on {x['objects']} passive "
+        f"objects? (A) Days 0..+3 residual change, MSIS 2.1 raw -> smoothed over 3 days: May 2024 "
+        f"{may['raw'][0]:+.1f} -> {may['smooth'][0]:+.1f}, Oct 2024 {oct_['raw'][0]:+.1f} -> {oct_['smooth'][0]:+.1f}, "
+        f"Dec 2024 {dec['raw'][0]:+.1f} -> {dec['smooth'][0]:+.1f} m/day (all {x['n_storms']} storms "
+        f"{x['all'][0]:+.1f} -> {x['all_s3'][0]:+.1f}); best lag {x['best_lag']:+d} h, correlation only "
+        f"{x['lag_gain']:.3f} above 0 h. (B) Running observed - predicted loss from the calm day before (dashed: "
+        f"the pre-storm error carried on): May keeps rising at its pre-storm rate and gives part back after day 6, "
+        f"Oct jumps after the storm and stays up, Dec falls. (C) Calm-to-calm loss, last calm day in days -10..-3 to "
+        f"the first calm day after recovery_end (calm = every 3-h ap < 27; {x['calm_storms']} of {x['n_storms']} "
+        f"storms have both): observed / predicted May {may['ratio'][0]:.2f}, Oct {oct_['ratio'][0]:.2f}, "
+        f"Dec {dec['ratio'][0]:.2f}; minus the +-30-day quiet error May {may['quiet'][0]:+.0f} m, "
+        f"Oct {oct_['quiet'][0]:+.0f} m, Dec {dec['quiet'][0]:+.0f} m. With the calm day after pushed later, "
+        f"observed / predicted May/Oct/Dec {sens}. High-altitude control (1,040-1,211 km): |difference| at most "
+        f"{x['high_quiet'][0]:.0f} m. Verdict (PLAN.md rules): {x['verdict']}.",
         "",
     ])
 
@@ -390,6 +509,7 @@ def main(out_dir=OUT_DIR):
     if "time" in sw.columns:
         sw = sw.set_index("time")
     objects = pd.read_parquet(PROCESSED / "objects.parquet")
+    tles = pd.read_parquet(extreme_check.TLES_PATH)
 
     numbers = {}
     for key, name, make in [
@@ -400,6 +520,8 @@ def main(out_dir=OUT_DIR):
         ("class", "fig5_model_error_by_class.png", lambda: fig_class_error(table, storms)),
         ("valid", "fig6_validation.png", lambda: fig_validation(table, objects)),
         ("offset", "fig7_operator_offset.png", lambda: fig_offset(storms)),
+        ("extreme", "fig8_extreme_check.png",
+         lambda: fig_extreme_check(extreme_check.run((table, storms, physics.load_msis_weather(), tles)))),
     ]:
         fig, numbers[key] = make()
         if key == "offset":

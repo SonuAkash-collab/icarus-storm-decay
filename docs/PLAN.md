@@ -507,6 +507,7 @@ synthetic data.
   | High-altitude control (15 objects) | -0.023 (CI -0.026 to -0.021): inside +-0.196, PASS; ~6% of the main effect, not exactly 0 | -0.009 (CI -0.013 to -0.006); no band (main covers 0) |
   | Random common cause | moved -0.02 SE | moved +0.08 SE |
   | Shuffled storm timing (20) | mean -0.003, SD 0.031; none as large as the real | mean -0.007, SD 0.025; none as large |
+  | Shuffled storm timing, frozen run (100, Nov 7) | mean +0.004, SD 0.028, max abs 0.091; **placebo p = 0.010** (0 of 100 as large) | mean +0.004, SD 0.025, max abs 0.083; placebo p = 0.040 (3 of 100 as large); the bootstrap CI covers 0, so borderline, not claimed |
   | Without May / Oct 2024 (storms 3, 4, 11) | -0.511 (CI -0.648 to -0.375) | -0.159 (CI -0.273 to -0.050) |
   | Lag 0 / 6 / 12 / 24 h without them | (not rerun) | -0.15 / -0.11 / 0.00 / +0.05 (12-24 h CIs cover 0) |
 

@@ -55,7 +55,7 @@ from sklearn.model_selection import GroupKFold
 from xgboost import XGBRegressor
 
 from src.dag import check_adjustment
-from src.schema import CONFOUNDERS, main_sample
+from src.schema import CONFOUNDERS, high_alt_sample, main_sample
 
 TREATMENT = "ap_mean"
 # CONFOUNDERS with day_of_year as a season wave (so late Dec and early Jan are close)
@@ -72,10 +72,14 @@ def time_clusters(df):
     return np.where(df["storm_id"].notna(), "s" + df["storm_id"].astype(str), "w" + week)
 
 
-def prepare(table, outcome="Y_residual", use_main_sample=True):
-    """Rows and columns DML needs: main sample, outcome present, treatment, features, cluster."""
+def prepare(table, outcome="Y_residual", sample="main"):
+    """Rows and columns DML needs: outcome present, treatment, features, cluster.
+
+    sample: "main" (schema.main_sample), "high_alt" (schema.high_alt_sample, the
+    negative control) or None (every row as given).
+    """
     check_adjustment(CONFOUNDERS)
-    df = main_sample(table) if use_main_sample else table
+    df = {"main": main_sample, "high_alt": high_alt_sample, None: lambda t: t}[sample](table)
     df = df[df[outcome].notna()]
     angle = 2 * np.pi * df["day_of_year"] / 365.25
     return df.assign(ap_mean=df["T_ap_int"] / df["dt_days"],
@@ -166,17 +170,19 @@ def linear(df, outcome="Y_residual", n_boot=999, seed=0):
     return wls_cluster(X, df[outcome], df["dt_days"], df["cluster"], n_boot, seed)
 
 
-def dml(df, outcome="Y_residual", n_folds=5, n_boot=999, seed=0, model_y=None, model_t=None):
+def dml(df, outcome="Y_residual", n_folds=5, n_boot=999, seed=0, model_y=None, model_t=None,
+        features=FEATURES):
     """DML with selected nuisance models and time-block cross-fitting.
 
     model_y / model_t: candidate names to force a helper model; None = select by
-    held-out error. Returns the wls_cluster dict plus model_y / model_t (names used),
+    held-out error. features: confounder columns (refutations add extra ones).
+    Returns the wls_cluster dict plus model_y / model_t (names used),
     selection (held-out scores of every candidate, empty if forced), the cross-fitted
     residuals (y_res, t_res) and the econml point estimate (theta_econml, should
     equal coef).
     """
     folds = time_folds(df["cluster"].to_numpy(), n_folds, seed)
-    W, w = df[FEATURES].to_numpy(), df["dt_days"].to_numpy()
+    W, w = df[list(features)].to_numpy(), df["dt_days"].to_numpy()
     scores_y = scores_t = {}
     if model_y is None:
         model_y, scores_y = select_model(W, df[outcome], w, folds, seed)

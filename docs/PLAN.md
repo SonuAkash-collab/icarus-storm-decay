@@ -563,6 +563,21 @@ synthetic data.
   difference to the rest is not significant at storm level. Synthetic check: the planted
   per-nT effect is the same in every class and DML-by-class recovers it in each (within
   25%), with no significant big-vs-rest gap.
+- **Nov 7, vulnerability per unit drag sensitivity (Holla, Sonu's request)**: storm decay
+  scales with area-to-mass by the drag equation, so the 0.89 drag importance of the `Y_total`
+  map is mostly physics. `python -m src.vulnerability_map --per-drag`: the same forest on
+  `Y_total / drag_sensitivity` ((m/day per nT) per m^2/kg). Real data: importance
+  **altitude 0.993**, inclination 0.005, drag sensitivity 0.002; 5-seed map correlation
+  >= 0.991. Within an altitude row the map is flat across drag sensitivity, i.e. the storm
+  effect is proportional to drag sensitivity; per unit drag it falls from about -12 at
+  617 km to about -4 at 747 km (about -28 at 519 km and -2 at 779 km, single supported
+  cells), roughly an e-fold per 100-120 km, of the order of a thermospheric density scale
+  height. Cross-check: the `Y_total` map divided cell by cell by its drag sensitivity
+  correlates 0.96 with the per-drag forest over the supported cells. Synthetic check
+  (planted per-drag effect depends on altitude only): altitude importance 0.88, drag
+  0.09; per-object correlation with the planted per-drag effect 0.67 (both routes; the raw
+  map gets 0.93), so this map is read for its altitude pattern, not cell values. Weighting
+  rows by dt x drag^2 did not help (0.66). Figure `results/vulnerability_map_Y_total_per_drag.png`.
 - **Nov 7, model-based offset ratio: overlapping storms and quiet ap (Siddhant Anil)**: review
   before the freeze found two problems with all 20 storms in play. (1) Windows overlapped: the
   May 2 storm's recovery window held ~16 km of the May 10 superstorm's predicted loss again, and

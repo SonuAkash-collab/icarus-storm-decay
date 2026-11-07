@@ -529,3 +529,16 @@ synthetic data.
   This agrees with the extreme-storm check (Sonu, Oct 31): Oct 2024 is a real overshoot,
   May 2024 a timing error, Dec 2024 an under-prediction, i.e. storm-specific errors and no
   general model error by storm size.
+  **In DML** (`storm_class.dml_by_class`): one first stage on the whole main sample, final
+  slope of the leftovers per class over the rows of that class's storms, storm-clustered
+  wild bootstrap for >= 3 storms, exact permutation over the 1,140 storm splits for big vs
+  rest. Per nT of ap: `Y_residual` moderate -0.140 (CI -0.260 to -0.013), strong -0.208
+  (CI -0.341 to -0.072), severe -0.045, extreme +0.019 (no CI); big minus rest +0.191,
+  p = 0.32. `Y_total` moderate -0.565 (CI -0.764 to -0.359), strong -0.591 (CI -0.719 to
+  -0.457), severe -0.603, extreme -0.254; big minus rest +0.247, p = 0.45. Reading: in
+  moderate and strong storms MSIS under-predicts the storm-time drag (objects lose more
+  than predicted, CIs exclude 0); in the three biggest storms the per-nT model error is
+  about 0 and the per-nT total effect smaller (saturation), but with three storms the
+  difference to the rest is not significant at storm level. Synthetic check: the planted
+  per-nT effect is the same in every class and DML-by-class recovers it in each (within
+  25%), with no significant big-vs-rest gap.

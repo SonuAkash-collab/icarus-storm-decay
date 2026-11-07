@@ -93,19 +93,20 @@ def offset_part(table, storms, n_boot=999, n_placebo_reps=20, seed=0):
                                                              n_boot=n_boot, seed=seed)}
 
 
-def model_part(table, storms, n_boot=999, seed=0):
-    """offset_model.run, or {"error": reason} if the table lacks its columns or storms."""
+def model_part(table, storms, n_boot=999, seed=0, sw=None):
+    """offset_model.run, or {"error": reason} if the table lacks its columns or storms.
+    sw: hourly space weather for the quiet-ap check (skipped if None)."""
     missing = [c for c in MODEL_COLUMNS if c not in table]
     if missing:
         return {"error": f"the table has no {missing} (real-table columns from src/build_table.py)"}
     try:
-        return om.run(table, storms, n_boot=n_boot, seed=seed)
+        return om.run(table, storms, n_boot=n_boot, seed=seed, sw=sw)
     except ValueError as e:
         return {"error": str(e)}
 
 
 def run(table, storms, out_dir=OUT_DIR, outcomes=None, n_placebo=500, n_boot=999,
-        n_placebo_reps=20, seed=0, fig_dir=FIG_DIR):
+        n_placebo_reps=20, seed=0, fig_dir=FIG_DIR, sw=None):
     """All track C results on one table; writes them to out_dir and returns a dict."""
     outcomes = available_outcomes(table, outcomes or OUTCOMES)
     if not outcomes:
@@ -117,7 +118,7 @@ def run(table, storms, out_dir=OUT_DIR, outcomes=None, n_placebo=500, n_boot=999
     # The offset ratio needs active satellites (question 3); skip it without them
     has_actives = bool((table["is_active"] == 1).any())
     out["offset"] = offset_part(table, storms, n_boot, n_placebo_reps, seed) if has_actives else None
-    out["offset_model"] = model_part(table, storms, n_boot, seed) if has_actives else None
+    out["offset_model"] = model_part(table, storms, n_boot, seed, sw) if has_actives else None
     write(out, Path(out_dir))
     if fig_dir is not None:
         figures(out, Path(fig_dir))
@@ -200,6 +201,9 @@ def model_text(mod):
     for (storms_name, pred, stat), row in s.iterrows():
         lines.append(f"| {storms_name} | {pred} | {MODEL_STATS[stat]} | {row['est']:.3f} "
                      f"| {row['ci_lo']:.3f} to {row['ci_hi']:.3f} | {int(row['n_storms'])} |")
+    if mod.get("noisy_quiet"):
+        lines += ["", "- Quiet-ap run leaves out storms " + ", ".join(map(str, mod["noisy_quiet"]))
+                  + f": their quiet ap (days -10..-3) is over {om.QUIET_AP_RATIO} x the storm-free median."]
     b = mod["b_sensitivity"]
     lines += ["", "- Drag-sensitivity scale (true B = k x catalog-scaled B), total offset: "
               + ", ".join(f"k = {k}: {b.loc['offset_total', k]:.3f}" for k in b.columns) + "."]
@@ -282,6 +286,8 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--table", help="analysis table (default data/processed/analysis_table.parquet)")
     p.add_argument("--storms", help="storm catalog (default data/processed/storms.parquet)")
+    p.add_argument("--spaceweather", help="hourly space weather for the quiet-ap check "
+                   "(default data/processed/spaceweather.parquet; skipped if missing)")
     p.add_argument("--synthetic", action="store_true", help="run on make_synthetic instead")
     p.add_argument("--quick", action="store_true", help="few draws, for a smoke test")
     p.add_argument("--out", default=str(OUT_DIR))
@@ -291,11 +297,17 @@ def main(argv=None):
     if args.synthetic:
         from src.synthetic import make_synthetic
         table, storms = make_synthetic(n_objects=400, active_share=0.25, noise=1.0, n_high_alt=15, seed=args.seed)
+        sw = None
     else:
+        from src.omni_io import load_spaceweather
         from src.storms import load_storms
         table, storms = load_table(args.table), load_storms(args.storms)
+        try:
+            sw = load_spaceweather(args.spaceweather)
+        except FileNotFoundError:
+            sw = None
     draws = dict(n_placebo=20, n_boot=49, n_placebo_reps=4) if args.quick else {}
-    out = run(table, storms, args.out, seed=args.seed, fig_dir=args.figures, **draws)
+    out = run(table, storms, args.out, seed=args.seed, fig_dir=args.figures, sw=sw, **draws)
     print(summary_text(out))
 
 

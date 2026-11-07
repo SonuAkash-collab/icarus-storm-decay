@@ -23,8 +23,23 @@ The recovery-window ratio divides by a small P (the storm is mostly over), so it
 noisy; duck_part / rec_part split the total additively instead:
     part_w = sum(P_w - O_w) / sum(P_duck + P_rec),   total = duck_part + rec_part.
 
-All 20 storms are used (no clean-window rule), so windows of nearby storms overlap and
-a row can count for two storms; the storm-clustered bootstrap resamples whole storms.
+All 20 storms are used (no clean-window rule), so windows of nearby storms overlap. Two
+rules keep a storm from being scored with another storm's rows (own_rows, default on):
+- the ducking and recovery windows end at the next storm's main_onset, so no main phase
+  counts twice (without this the May 2 2024 recovery window held most of the May 10
+  superstorm a second time);
+- the predicted loss of a row uses the quiet ap of the storm it is linked to
+  (schema.link_storms: nearest main_onset). Rows in the windows linked to another storm
+  (the last days before the next storm) get S = 0: the next storm's quiet ap is the
+  wrong counterfactual for them, and these late-recovery days carry little storm loss.
+A window shortened to nothing contributes 0; coverage is checked against the shortened
+length. The baseline window keeps every row. The storm-clustered bootstrap resamples
+whole storms, which is optimistic when storms sit close together.
+
+Quiet ap check: the counterfactual holds ap at the median over days -10..-3, which is
+not quiet when an earlier storm falls there. With the hourly space weather, run() adds
+a run without the storms whose quiet ap is more than QUIET_AP_RATIO x the median ap of
+all storm-free hours (noisy_quiet_storms).
 Intervals: wild cluster bootstrap by storm (Webb six-point weights, as in
 src/event_study.py) on the ratio: per storm O_s* = R P_s + v_s (O_s - R P_s), with the
 same weight v_s for every window of that storm.
@@ -58,14 +73,21 @@ MIN_PASSIVE = 5                 # fewer passive objects in a band -> class-only 
 CHANGE_DAYS = 21                # orbit-change screen: window length ...
 MAX_CHANGE_KM = 1.0             # ... and the largest net altitude change still counted as holding
 MAX_PLACEBO_B_SCALE = 1.5       # placebo objects decay at most this x the catalog free-drag rate
+QUIET_AP_RATIO = 1.5            # quiet ap above this x the storm-free median -> not quiet
 WINDOWS = ("duck", "rec")
 
 
 def windows_for(storm, recovery_days=RECOVERY_DAYS):
+    """pre / duck / rec windows (start, end). If the storm has a next_onset (storm_pairs
+    sets it), duck and rec end there at the latest."""
     onset, rec = storm["main_onset"], storm["recovery_end"]
+    rec_end = rec + pd.Timedelta(days=recovery_days)
+    nxt = storm.get("next_onset")
+    if nxt is not None and not pd.isna(nxt):
+        rec, rec_end = min(rec, nxt), min(rec_end, nxt)
     return {"pre": (onset + pd.Timedelta(days=PRE[0]), onset + pd.Timedelta(days=PRE[1])),
             "duck": (onset, rec),
-            "rec": (rec, rec + pd.Timedelta(days=recovery_days))}
+            "rec": (rec, rec_end)}
 
 
 def _in(rows, start, end):
@@ -79,14 +101,19 @@ def alt_band(alt_km, bands=ALT_BANDS):
     return np.array([f"{bands[k - 1]}-{bands[k]}" if 0 < k < len(bands) else None for k in i], dtype=object)
 
 
-def storm_windows(rows, storm, recovery_days=RECOVERY_DAYS, min_cover=MIN_COVER, b_scale=None):
+def storm_windows(rows, storm, recovery_days=RECOVERY_DAYS, min_cover=MIN_COVER, b_scale=None, own_rows=True):
     """One row per object covering every window: baseline, O_w, P_w and covered days.
 
     rows: analysis-table rows with obs_decay, Y_total, Y_residual (m/day). b_scale:
     optional Series by norad_id multiplying B (the predicted storm loss scales with B).
+    own_rows: rows linked to another storm (storm_id, if the rows have it) get no
+    predicted storm loss (S = 0), see the module docstring.
     """
     win = windows_for(storm, recovery_days)
     S = rows["Y_total"] - rows["Y_residual"]
+    if own_rows and "storm_id" in rows:
+        other = (rows["storm_id"] != storm["storm_id"]).fillna(True).to_numpy(dtype=bool)
+        S = S.where(~other, 0.0)
     if b_scale is not None:
         S = S * rows["norad_id"].map(b_scale).fillna(1.0)
     rows = rows.assign(S=S, obs_dt=rows["obs_decay"] * rows["dt_days"], S_dt=S * rows["dt_days"])
@@ -98,8 +125,8 @@ def storm_windows(rows, storm, recovery_days=RECOVERY_DAYS, min_cover=MIN_COVER,
         g = _in(rows, start, end).groupby("norad_id")
         days = g["dt_days"].sum().reindex(out.index).fillna(0)
         out[f"days_{w}"] = days
-        out[f"P_{w}"] = g["S_dt"].sum().reindex(out.index)
-        out[f"O_{w}"] = g["obs_dt"].sum().reindex(out.index) - out["baseline"] * days
+        out[f"P_{w}"] = g["S_dt"].sum().reindex(out.index).fillna(0.0)
+        out[f"O_{w}"] = g["obs_dt"].sum().reindex(out.index).fillna(0.0) - out["baseline"] * days
         ok &= days >= min_cover * (end - start) / pd.Timedelta(days=1)
     out = out[ok].dropna()
     alt = rows.groupby("norad_id")["alt_km"].mean().reindex(out.index)
@@ -107,9 +134,13 @@ def storm_windows(rows, storm, recovery_days=RECOVERY_DAYS, min_cover=MIN_COVER,
                       band=alt_band(alt)).rename_axis("norad_id").reset_index()
 
 
-def storm_pairs(rows, storms, recovery_days=RECOVERY_DAYS, min_cover=MIN_COVER, b_scale=None):
-    """storm_windows for every storm, stacked (one row per storm and object)."""
-    parts = [storm_windows(rows, s, recovery_days, min_cover, b_scale) for s in storms.to_dict("records")]
+def storm_pairs(rows, storms, recovery_days=RECOVERY_DAYS, min_cover=MIN_COVER, b_scale=None, own_rows=True):
+    """storm_windows for every storm, stacked (one row per storm and object). With
+    own_rows, each storm's windows end at the next storm's main_onset."""
+    storms = storms.sort_values("main_onset")
+    if own_rows:
+        storms = storms.assign(next_onset=storms["main_onset"].shift(-1))
+    parts = [storm_windows(rows, s, recovery_days, min_cover, b_scale, own_rows) for s in storms.to_dict("records")]
     parts = [p for p in parts if len(p)]
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
@@ -199,6 +230,22 @@ def offset(pairs, pred="P", n_boot=999, seed=0):
     return out
 
 
+def noisy_quiet_storms(storms, sw, ratio=QUIET_AP_RATIO):
+    """Storm ids whose quiet ap (physics.quiet_ap: median over days -10..-3) is more than
+    `ratio` x the median hourly ap outside every storm window (physics.storm_windows):
+    an earlier storm sits in the quiet window, so the counterfactual is not quiet.
+    sw: hourly space weather indexed by time (omni_io.load_spaceweather)."""
+    from src.physics import quiet_ap
+    from src.physics import storm_windows as storm_spans
+    t = sw.index
+    calm = np.ones(len(sw), dtype=bool)
+    for start, end in storm_spans(storms):
+        calm &= ~((t >= start) & (t < end))
+    ref = sw.loc[calm, "ap"].median()
+    q = quiet_ap(sw, storms)
+    return sorted(int(k) for k in q[q > ratio * ref].index)
+
+
 def orbit_change_flags(rows, days=CHANGE_DAYS, max_change_km=MAX_CHANGE_KM):
     """1 for rows inside a `days`-day window whose net altitude change (sum obs * dt)
     exceeds max_change_km either way: the operator is moving the satellite (orbit raise,
@@ -268,12 +315,14 @@ def b_scale_sensitivity(pairs, scales=(0.75, 1.25)):
     return pd.DataFrame(rows).rename_axis(columns="b_scale")
 
 
-def run(table, storms, n_boot=999, seed=0, recovery_days=RECOVERY_DAYS):
+def run(table, storms, n_boot=999, seed=0, recovery_days=RECOVERY_DAYS, sw=None):
     """Every model-based offset result. Returns a dict:
     pairs (with the correction columns), errors (model_error), summary (stacked:
     run x statistic with est / ci_lo / ci_hi / se), placebo (own B and catalog B),
-    b_sensitivity, placebo_b_scale (own fitted / catalog B of the placebo objects).
-    Runs: all storms and without May / Oct 2024, uncorrected and corrected.
+    b_sensitivity, placebo_b_scale (own fitted / catalog B of the placebo objects),
+    noisy_quiet (storm ids left out of the quiet-ap run; empty without sw).
+    Runs: all storms and without May / Oct 2024, uncorrected and corrected; with sw
+    (hourly space weather) also without the storms whose quiet ap is not quiet.
     """
     errors = model_error(table, storms, recovery_days)
     pairs = add_correction(storm_pairs(active_rows(table), storms, recovery_days), errors)
@@ -281,8 +330,12 @@ def run(table, storms, n_boot=999, seed=0, recovery_days=RECOVERY_DAYS):
         raise ValueError("Fewer than 2 storms with active satellites covering every window")
     drop = key_storm_ids(storms)
     without = pairs[~pairs["storm_id"].isin(drop)]
+    noisy = noisy_quiet_storms(storms, sw) if sw is not None else []
+    variants = [("all storms", pairs), (f"without {','.join(map(str, drop))}", without)]
+    if noisy:
+        variants.append((f"quiet ap (without {','.join(map(str, noisy))})", pairs[~pairs["storm_id"].isin(noisy)]))
     runs = {}
-    for name, p in (("all storms", pairs), (f"without {','.join(map(str, drop))}", without)):
+    for name, p in variants:
         for pred, label in (("P", "uncorrected"), ("Pc", "corrected")):
             r = offset(p, pred, n_boot, seed)
             runs[(name, label)] = r.assign(n_storms=r.attrs["n_storms"], n_objects=r.attrs["n_objects"],
@@ -301,4 +354,4 @@ def run(table, storms, n_boot=999, seed=0, recovery_days=RECOVERY_DAYS):
                                                     n_pairs=r.attrs["n_pairs"])
     placebo = pd.concat(placebo, names=["b", "prediction", "statistic"]) if placebo else pd.DataFrame()
     return {"pairs": pairs, "errors": errors, "summary": summary, "placebo": placebo,
-            "b_sensitivity": b_scale_sensitivity(pairs), "placebo_b_scale": scale}
+            "b_sensitivity": b_scale_sensitivity(pairs), "placebo_b_scale": scale, "noisy_quiet": noisy}

@@ -44,6 +44,7 @@ from src.schema import ROOT, load_table
 
 EQUIV_BAND = 0.5          # high-altitude band, share of |main estimate| (decided Oct 31)
 PLANTED_LAG_HOURS = 12
+N_SHIFTS = 100           # placebo shifts in the frozen run (20 can only show p <= 0.05)
 OUTCOMES = ["Y_total", "Y_residual"]
 OUT_DIR = ROOT / "results" / "dml"
 
@@ -101,6 +102,12 @@ def placebo_shifts(df, outcome, hourly, n_shifts=20, min_days=30, seed=0, **dml_
     return pd.DataFrame(rows)
 
 
+def placebo_p(placebo, real_coef):
+    """(1 + shifts at least as large as the real estimate in absolute value) / (n + 1)."""
+    k = int((placebo["coef"].abs() >= abs(real_coef)).sum())
+    return (1 + k) / (len(placebo) + 1)
+
+
 def drop_storm_rows(df, storms, drop):
     """Rows not linked to a dropped storm and not overlapping its active window."""
     keep = ~df["storm_id"].isin(drop).fillna(False).to_numpy(bool)
@@ -145,7 +152,7 @@ def plant_lag(table, hourly, lag_hours=PLANTED_LAG_HOURS):
     return out[~np.isnan(lagged)]
 
 
-def run(table, storms, hourly, outcomes=None, n_shifts=20, n_boot=999, seed=0, out_dir=OUT_DIR):
+def run(table, storms, hourly, outcomes=None, n_shifts=N_SHIFTS, n_boot=999, seed=0, out_dir=OUT_DIR):
     """Every refutation on the real table, per outcome; written to out_dir unless None."""
     out = {}
     for y in outcomes or [o for o in OUTCOMES if o in table]:
@@ -184,7 +191,7 @@ def summary_text(out):
     lines = ["# DML refutations", "", "Effects in m/day per nT of interval-mean ap.", ""]
     for y, r in out.items():
         h, rc, p, w = r["high_alt"], r["random_cc"], r["placebo"], r["without"]
-        beyond = (p["coef"].abs() >= abs(r["base"]["coef"])).mean()
+        p_value = placebo_p(p, r["base"]["coef"])
         equiv = ("not tested (main estimate covers 0)" if h["equivalent"] is None
                  else f"band +-{h['band']:.4f}: {'PASS' if h['equivalent'] else 'FAIL'}")
         lines += [f"## {y}", "", f"- Main sample DML: {_ci(r['base'])}",
@@ -192,7 +199,7 @@ def summary_text(out):
                   f"- Random common cause: {rc['coef_base']:+.4f} -> {rc['coef_random_cc']:+.4f} "
                   f"({rc['shift_in_se']:+.3f} SE)",
                   f"- Shuffled storm timing ({len(p)} shifts): mean {p['coef'].mean():+.4f}, SD {p['coef'].std():.4f}; "
-                  f"share at least as large as the real estimate {beyond:.2f}"]
+                  f"placebo p = {p_value:.3f} (as large as the real estimate in {int(round(p_value * (len(p) + 1))) - 1} of {len(p)})"]
         for name, row in w.iterrows():
             lines.append(f"- {name}: {_ci(row)}, {int(row['n_rows']):,} rows")
         lines += ["", "ap lag sweep with and without those storms:", "", "| sample | lag (h) | per nT |", "|---|---|---|"]

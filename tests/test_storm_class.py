@@ -56,3 +56,39 @@ def test_bigger_storms_show_more_planted_decay():
     assert classes.loc["severe", "mean"] < classes.loc["strong", "mean"] < classes.loc["moderate", "mean"] < 0
     assert classes.loc["moderate", "ci_hi"] < 0
     assert out["big_vs_rest"]["gap"] < 0 and out["big_vs_rest"]["p_exact"] < 0.05
+
+
+def test_dml_permutation_is_exact_when_big_storms_have_a_steeper_slope():
+    # per-storm sums: big storms have slope a/b = 2, the rest 0
+    classes = ["extreme", "severe", "severe"] + ["moderate"] * 11 + ["strong"] * 6
+    sums = pd.DataFrame({"storm_id": range(1, 21), "storm_class": classes,
+                         "a": [2.0] * 3 + [0.0] * 17, "b": [1.0] * 20})
+    out = sc.dml_big_vs_rest(sums)
+    assert out["gap"] == pytest.approx(2.0) and out["coef_rest"] == pytest.approx(0.0)
+    assert out["p_exact"] == pytest.approx(1 / comb(20, 3))
+
+
+def test_dml_by_class_recovers_the_same_planted_slope_in_every_class():
+    # the synthetic effect is linear in ap, so its per-nT size does not depend on the class
+    from src import dml
+
+    table, _ = make_synthetic(n_objects=200, seed=0)
+    df = dml.prepare(table)
+    by_class, sums = sc.dml_by_class(df, n_boot=99, model_y="xgb", model_t="linear")
+    planted = -df["true_tau"].mean()
+    assert set(by_class.index) == set(df["storm_class"].dropna())
+    assert (by_class["coef"] / planted).between(0.75, 1.25).all()
+    assert len(sums) == df["storm_id"].nunique()
+    assert sc.dml_big_vs_rest(sums)["p_exact"] > 0.05
+
+
+def test_dml_by_class_handles_a_one_storm_class():
+    # the real catalog has a single extreme storm: slope only, no interval, no crash
+    from src import dml
+
+    table, storms = make_synthetic(n_objects=80, seed=0)
+    one = int(storms["storm_id"].iloc[0])
+    table = table.assign(storm_class=table["storm_class"].where(table["storm_id"] != one, "extreme"))
+    by_class, _ = sc.dml_by_class(dml.prepare(table), n_boot=19, model_y="xgb", model_t="linear")
+    assert by_class.loc["extreme", "n_storms"] == 1
+    assert np.isfinite(by_class.loc["extreme", "coef"]) and np.isnan(by_class.loc["extreme", "ci_lo"])

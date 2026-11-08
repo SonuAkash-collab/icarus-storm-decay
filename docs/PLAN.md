@@ -226,8 +226,9 @@ synthetic data.
       Figures: `results/event_study_Y_total.png`, `results/event_study_Y_residual.png`.
       Day 0 carries most of the total effect (about -30 m/day), day 1 about -12, back near
       0 by day 2; model error is -9 on day 0 and slightly positive on days 1-2.
-- [ ] **Real run, offset ratio**: waits for the active satellites to join the table
-      (25 Starlink + 1 other); question 3 is then effectively about Starlink.
+- [x] ~~**Real run, offset ratio** (twin-based)~~: replaced by the model-based offset ratio
+      below (no passive twin lies near the Starlinks, decision log Oct 31); the twin code stays
+      for the debris placebo and match diagnostics.
 - [x] **Model-based offset ratio** (branch `C-offset-model`, `src/offset_model.py`,
       `notebooks/08_offset_model.ipynb`, in `python -m src.causal_run`): each active satellite vs
       its own physics-predicted storm loss (MSIS 2.1 actual ap minus quiet ap, catalog-scaled B),
@@ -281,6 +282,15 @@ synthetic data.
       Garcia-Sage). What is new here: population-wide, causal, separates the storm
       from Sun UV, model-error and total-effect estimates, validated on synthetic
       ground truth.
+
+## Known limitations (after Nov 14)
+
+- **Storm-free quiet ap** (`physics.quiet_ap_drivers`): the quiet ap of each storm is the median
+  ap over days -10..-3, which is 12-22 for storms 10, 15, 16, 17, 19, 20 (an earlier storm sits
+  in that window) vs 5-9 elsewhere. `Y_total` and the offset model's predicted loss use it. The
+  offset model reports a run without those storms (`offset_model.noisy_quiet_storms`); the real
+  fix is a quiet ap from storm-free hours only, which needs the quiet-ap drivers rebuilt
+  (~40 min) and every `Y_total` result rerun. Not done for the Nov 8 freeze.
 
 ## Decision rules
 
@@ -597,3 +607,26 @@ synthetic data.
   days; big storms +80 to +160 m): overshooting thrust or a TLE mean-element artifact, read as
   "at least a full offset". Checked: the free-drag and orbit-change screens (both defined from
   observed altitude) drop deorbits and orbit raises, not uncompensated storm losses.
+- **Nov 8, results frozen (Sonu)**: every result rerun on `analysis_table.parquet` (branch
+  `B-results-freeze`): `src.causal_run`, `src.dml_run`, `src.dml_refute` (100 shifts),
+  `src.storm_class` (both outcomes), `src.vulnerability_map` (with and without `--per-drag`), then
+  `src.review_figures` (9 figures; SUMMARY.md reads every number from results/causal and
+  results/dml). Headline numbers:
+  - Q1 total: event study days 0-2 `Y_total` -14.1 m/day (CI -19.8 to -8.4); DML -0.393 per nT
+    (CI -0.527 to -0.268); high-altitude control -0.023 (inside +-0.197, PASS); placebo p = 0.010
+    (100 shifts); without May / Oct 2024 -0.503 (CI -0.642 to -0.361).
+  - Q1 model error: storm-window total about right (event study +0.2, CI -3.2 to 3.2) but DML by
+    class under-predicts decay at peak ap in moderate (-0.133, CI -0.247 to -0.010) and strong
+    (-0.210, CI -0.348 to -0.068) storms; severe storms storm-specific (Oct 2024 overshoot, obs/pred
+    0.86; May 2024 timing; Dec 2024 under-prediction, 1.19). The 12-24 h lag (24 h +0.117, CI 0.035
+    to 0.200) is gone without May + Oct 2024 (24 h +0.048, CI -0.055 to 0.152): not general.
+    `Y_residual` placebo p is now 0.059 (5 of 100; 0.040 in the Nov 7 run), still not claimed.
+  - Q2: importance drag 0.892 / altitude 0.101 (`Y_total`, 5-seed min corr 0.986); per unit drag
+    altitude 0.993 (min corr 0.995); per-drag effect -10.8 at 617 km to -3.7 at 747 km (2.9x);
+    cross-check 0.96.
+  - Q3: Starlink offset, model-error corrected, 1.17 (CI 0.97 to 1.36; 21 satellites, 20 storms),
+    ducking part 1.16, recovery part +0.01 (CI -0.22 to 0.21); without the 6 disturbed-quiet-ap
+    storms 1.15 (CI 1.04 to 1.26; recovery part there +0.15, CI 0.04 to 0.28); without May / Oct
+    2024 1.25 (CI 1.08 to 1.41).
+  Small reruns moved a few digits (DML moderate -0.140 -> -0.133, corrected offset CI 0.98 -> 0.97);
+  the frozen numbers are the ones in results/review/SUMMARY.md.

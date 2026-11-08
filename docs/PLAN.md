@@ -595,6 +595,7 @@ synthetic data.
   12 and 20 have a positive predicted loss in their recovery windows (actual ap below a disturbed
   quiet ap). Values above 1 are not noise (storm-free dates: -1 +- 29 m per satellite over 3
   days; big storms +80 to +160 m): overshooting thrust or a TLE mean-element artifact, read as
-  "about a full offset (1.17-1.27), almost all of it during the storm" (two total-offset CIs dip
-  below 1: 0.77 and 0.98). Checked: the free-drag and orbit-change screens (both defined from
+  "about a full offset (1.15-1.25), almost all of it during the storm" (two total-offset CIs dip
+  below 1: 0.77 uncorrected, 0.97 corrected; frozen numbers in results/review/SUMMARY.md).
+  Checked: the free-drag and orbit-change screens (both defined from
   observed altitude) drop deorbits and orbit raises, not uncompensated storm losses.

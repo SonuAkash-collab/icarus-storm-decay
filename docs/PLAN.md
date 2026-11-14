@@ -632,3 +632,13 @@ synthetic data.
     2024 1.25 (CI 1.08 to 1.41).
   Small reruns moved a few digits (DML moderate -0.140 -> -0.133, corrected offset CI 0.98 -> 0.97);
   the frozen numbers are the ones in results/review/SUMMARY.md.
+- **Nov 14, final notebook (Sonu)**: `notebooks/ICARUS_final.ipynb` is the course code deliverable:
+  sections 0-10 (setup, data counts, storms, physics baseline and validation, event study, DML by
+  class and lag, extreme-storm check, vulnerability maps, offset ratio, robustness incl.
+  SENSITIVITY.md, headline check). `FAST = True` loads the saved outputs of the steps over 5 min
+  (build_table, causal_run, dml_run, dml_refute, storm_class, vulnerability_map) and recomputes
+  the rest (figures, extreme check ~2.5 min, sensitivity ~1.3 min); run time 3.8 min. All 35
+  headline numbers match SUMMARY.md (asserted), the SUMMARY.md text regenerated in the notebook is
+  identical to the saved file, and the SENSITIVITY.md rerun matches. GRACE-FO (r 0.70) and Swarm-A
+  (r 0.457) are quoted, not recomputed: the precise-orbit files are not in the repo. README has a
+  Reproduce section (download -> build table -> runs -> figures -> notebook).

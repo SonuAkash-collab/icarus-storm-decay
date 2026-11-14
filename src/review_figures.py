@@ -1,10 +1,12 @@
-"""Figure pack for the first review: eight figures and SUMMARY.md in results/review/.
+"""Review figure pack: nine figures and SUMMARY.md in results/review/.
 
     python -m src.review_figures
 
 Needs data/processed/{analysis_table, storms, spaceweather}.parquet, objects.parquet, the
-cleaned cohort TLEs (fig 8, src/extreme_check.py) and
-the track C outputs in results/causal (python -m src.causal_run). Each figure function
+cleaned cohort TLEs (fig 8, src/extreme_check.py), the track C outputs in results/causal
+(python -m src.causal_run) and the track D outputs in results/dml (python -m src.dml_run,
+src.dml_refute, src.storm_class for Y_residual, src.vulnerability_map with and without
+--per-drag). Each figure function
 takes plain frames and returns (figure, key numbers); the key numbers feed SUMMARY.md, so
 the summary is never typed by hand. Existing plotting code in src/plots.py is reused.
 """
@@ -23,12 +25,15 @@ import pandas as pd
 from scipy import stats
 
 from src import extreme_check, physics, plots
+from src import vulnerability_map as vm
+from src.dml_refute import placebo_p
 from src.objects import compare_drag
 from src.schema import main_sample
 
 ROOT = Path(__file__).resolve().parents[1]
 PROCESSED = ROOT / "data" / "processed"
 CAUSAL = ROOT / "results" / "causal"
+DML = ROOT / "results" / "dml"
 OUT_DIR = ROOT / "results" / "review"
 GRACE_IMAGE = ROOT / "results" / "a7_oct2024_decay_rate_lag_check.png"
 DPI = 150
@@ -398,6 +403,144 @@ def fig_extreme_check(out):
 
 
 # ---------------------------------------------------------------------------
+# 9. Vulnerability maps (src/vulnerability_map.py, question 2)
+# ---------------------------------------------------------------------------
+
+PER_DRAG_OUTCOME = "Y_total" + vm.PER_DRAG
+PROFILE_ALTS = (620, 750)      # rows compared in the per-drag altitude pattern (km)
+
+
+def per_drag_profile(grid, min_cells=2):
+    """Per-drag effect by altitude row: mean over the supported cells (n_near >= MIN_NEAR)
+    of every inclination. Rows with fewer than min_cells supported cells are left out, so
+    a single-cell row (the grid's lowest and highest altitudes) never sets the pattern."""
+    ok = grid[grid["n_near"] >= vm.MIN_NEAR]
+    # n_cells counts distinct drag-sensitivity cells: n_near ignores inclination, so one
+    # supported cell repeats at every inclination and must not count three times
+    prof = ok.groupby("alt_km").agg(effect=("effect", "mean"), n_cells=("drag_sensitivity", "nunique"))
+    return prof[prof["n_cells"] >= min_cells]
+
+
+def profile_ratio(prof, alts=PROFILE_ALTS):
+    """Effect at the supported rows nearest alts[0] and alts[1], and their ratio."""
+    pick = [prof.index[np.abs(prof.index - a).argmin()] for a in alts]
+    lo, hi = prof.loc[pick[0], "effect"], prof.loc[pick[1], "effect"]
+    return {"alt_lo": pick[0], "alt_hi": pick[1], "effect_lo": lo, "effect_hi": hi, "ratio": lo / hi}
+
+
+def q2_numbers(dml_dir=DML):
+    """Importances, seed stability, per-drag altitude pattern and cross-check, from the CSVs."""
+    d = Path(dml_dir)
+    out = {}
+    for y in ("Y_total", PER_DRAG_OUTCOME):
+        imp = pd.read_csv(d / f"vulnerability_importance_{y}.csv", index_col=0)["importance"]
+        st = pd.read_csv(d / f"vulnerability_stats_{y}.csv").iloc[0]
+        out[y] = {"importance": imp.to_dict(), "min_corr": st["min_corr"], "mean_corr": st["mean_corr"],
+                  "n_seeds": int(st["n_stability_seeds"]), "average": st["average_effect"],
+                  "n_objects": int(st["n_objects"])}
+    grid = pd.read_csv(d / f"vulnerability_grid_{PER_DRAG_OUTCOME}.csv")
+    out["profile"] = profile_ratio(per_drag_profile(grid))
+    out["cross_corr"] = pd.read_csv(d / "vulnerability_per_drag_cross_check_summary.csv").iloc[0]["corr_supported_cells"]
+    return out
+
+
+def fig_vulnerability(dml_dir=DML):
+    """Three panels: A per-object effect (Y_total) by altitude and drag sensitivity,
+    B the Y_total grid map, C the per-drag grid map (both at the median inclination,
+    grey = fewer than MIN_NEAR objects nearby)."""
+    d = Path(dml_dir)
+    objs = pd.read_csv(d / "vulnerability_objects_Y_total.csv")
+    grids = {y: pd.read_csv(d / f"vulnerability_grid_{y}.csv") for y in ("Y_total", PER_DRAG_OUTCOME)}
+    cmap = matplotlib.colormaps["RdBu"].copy()
+    cmap.set_bad("lightgrey")
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5.2), gridspec_kw={"width_ratios": [1.1, 1, 1]})
+    vmax = np.abs(objs["effect"]).max()
+    sc = axes[0].scatter(objs["drag_sensitivity"], objs["alt_km"], c=objs["effect"], cmap=cmap, vmin=-vmax,
+                         vmax=vmax, s=22, edgecolor="k", lw=0.3)
+    axes[0].set_xscale("log")
+    axes[0].set_xlabel("drag sensitivity (m$^2$/kg)")
+    axes[0].set_ylabel("altitude (km)")
+    fig.colorbar(sc, ax=axes[0], label="Y_total: m/day per nT of ap")
+    axes[0].set_title(f"A. Vulnerability per object ({len(objs)} objects)", loc="left", fontsize=12)
+    plots._clean_axes(axes[0])
+
+    for ax, (y, g), title, unit in zip(
+            axes[1:], grids.items(), ("B. Y_total map", "C. Per unit drag sensitivity"),
+            ("m/day per nT", "(m/day per nT) per m$^2$/kg")):
+        incs = sorted(g["inc_deg"].unique())
+        inc = incs[len(incs) // 2]
+        shown = g.assign(effect=g["effect"].where(g["n_near"] >= vm.MIN_NEAR))
+        v = np.nanmax(np.abs(shown["effect"]))
+        im = vm.draw_map(ax, shown, inc, v, cmap)
+        ax.set_ylabel("altitude (km)")
+        ax.set_title(f"{title} (inclination {inc:.0f} deg)", loc="left", fontsize=12)
+        fig.colorbar(im, ax=ax, label=unit)
+    fig.suptitle("Storm vulnerability (causal forest, Y_total); more negative = hit harder; "
+                 f"grey = fewer than {vm.MIN_NEAR} objects nearby", x=0.01, ha="left", fontsize=12)
+    fig.tight_layout()
+    return fig, q2_numbers(dml_dir)
+
+
+# ---------------------------------------------------------------------------
+# Track D numbers for the headline and the refutations block (results/dml)
+# ---------------------------------------------------------------------------
+
+def _tri(row, est="coef"):
+    return (float(row[est]), float(row["ci_lo"]), float(row["ci_hi"]))
+
+
+def dml_numbers(dml_dir=DML):
+    """DML main estimates, DML by storm class, lag sweeps and refutations, from the CSVs."""
+    d = Path(dml_dir)
+    out = {"main": {}, "refute": {}}
+    for y in ("Y_total", "Y_residual"):
+        out["main"][y] = _tri(pd.read_csv(d / f"compare_{y}.csv", index_col=0).loc["dml"])
+        ha = pd.read_csv(d / f"refute_high_alt_{y}.csv").iloc[0]
+        rc = pd.read_csv(d / f"refute_random_cc_{y}.csv").iloc[0]
+        pl = pd.read_csv(d / f"refute_placebo_{y}.csv")
+        wo = pd.read_csv(d / f"refute_without_{y}.csv", index_col=0)
+        lags = pd.read_csv(d / f"refute_lags_without_{y}.csv", index_col=[0, 1])
+        drop = [i for i in wo.index if i != "all storms"][0]
+        p = placebo_p(pl, wo.loc["all storms", "coef"])
+        out["refute"][y] = {
+            "high_alt": _tri(ha), "band": ha["band"], "n_high": int(ha["n_objects"]),
+            "equivalent": None if pd.isna(ha["equivalent"]) else str(ha["equivalent"]) == "True",
+            "rcc_shift_se": rc["shift_in_se"], "placebo_p": p, "n_shifts": len(pl),
+            "placebo_larger": int(round(p * (len(pl) + 1))) - 1,
+            "placebo_mean": pl["coef"].mean(), "placebo_sd": pl["coef"].std(),
+            "all": _tri(wo.loc["all storms"]), "without": _tri(wo.loc[drop]), "dropped": drop.split(" ", 1)[1],
+            "lags_all": {int(k): _tri(r) for k, r in lags.loc["all storms"].iterrows()},
+            "lags_without": {int(k): _tri(r) for k, r in lags.loc[drop].iterrows()}}
+    cls = pd.read_csv(d / "storm_class_dml_Y_residual.csv", index_col=0)
+    out["class"] = {c: _tri(r) + (int(r["n_storms"]),) for c, r in cls.iterrows()}
+    out["class_big_p"] = pd.read_csv(d / "storm_class_dml_big_vs_rest_Y_residual.csv").iloc[0]["p_exact"]
+    return out
+
+
+def offset_numbers(causal_dir=CAUSAL):
+    """Model-error-corrected offset: all storms, ducking / recovery parts, without May / Oct
+    2024, and without the storms whose pre-storm quiet ap was disturbed
+    (offset_model.noisy_quiet_storms)."""
+    m = pd.read_csv(Path(causal_dir) / "offset_model.csv", index_col=[0, 1, 2])
+    c = m.xs("corrected", level="prediction")
+    runs = c.index.get_level_values("storms").unique()
+    tri = lambda r: (float(r["est"]), float(r["ci_lo"]), float(r["ci_hi"]))     # noqa: E731
+    total = c.loc[("all storms", "offset_total")]
+    out = {"total": tri(total), "duck": tri(c.loc[("all storms", "duck_part")]),
+           "rec": tri(c.loc[("all storms", "rec_part")]),
+           "n_storms": int(total["n_storms"]), "n_objects": int(total["n_objects"])}
+    without = [r for r in runs if r.startswith("without")][0]
+    out["without"] = tri(c.loc[(without, "offset_total")])
+    quiet = [r for r in runs if r.startswith("quiet ap")]
+    if quiet:
+        out["quiet"] = tri(c.loc[(quiet[0], "offset_total")])
+        out["quiet_dropped"] = len(re.search(r"without ([\d,]+)", quiet[0]).group(1).split(","))
+        out["quiet_n_storms"] = int(c.loc[(quiet[0], "offset_total"), "n_storms"])
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Summary and driver
 # ---------------------------------------------------------------------------
 
@@ -405,20 +548,55 @@ def _ci(t, unit="", digits=1):
     return f"{t[0]:+.{digits}f}{unit} (95% CI {t[1]:+.{digits}f} to {t[2]:+.{digits}f})"
 
 
+def _per_nt(t):
+    return f"{t[0]:+.3f} (95% CI {t[1]:+.3f} to {t[2]:+.3f})"
+
+
+def _excludes_zero(t):
+    return t[1] > 0 or t[2] < 0
+
+
+def lag_text(rf):
+    """The 12-24 h model-error lag: with all storms and without May / Oct 2024."""
+    a, w = rf["lags_all"], rf["lags_without"]
+    both = lambda d: f"12 h {_per_nt(d[12])}, 24 h {_per_nt(d[24])}"      # noqa: E731
+    gone = not any(_excludes_zero(w[k]) and w[k][0] > 0 for k in (12, 24))
+    verdict = ("so it only appears with May + Oct 2024 and is not a general result"
+               if gone else "it survives without May + Oct 2024")
+    return (f"- The 12-24 h lag effect in the model error (less decay than MSIS predicts the day after high ap, "
+            f"i.e. MSIS keeps the storm atmosphere too long): all storms {both(a)}; without May + Oct 2024 "
+            f"(storms {rf['dropped']}) {both(w)}; {verdict}.")
+
+
 def headline_text(n):
-    """The Headline section: event study, all-storm model error and the fig 8 verdict."""
+    """The Headline section: Q1 (total effect and model error), Q2 (vulnerability), Q3 (offset)."""
     x = n["extreme"]
     may, oct_, dec = (x["storms"][k] for k in ("May 2024", "Oct 2024", "Dec 2024"))
     r = lambda t: f"{t[0]:.2f} (95% CI {t[1]:.2f} to {t[2]:.2f})"     # noqa: E731
     m = lambda t: f"{t[0]:+.0f} m (95% CI {t[1]:+.0f} to {t[2]:+.0f})"  # noqa: E731
+    d = n["dml"]
+    tot = d["main"]["Y_total"]
+    mod, strong = d["class"]["moderate"], d["class"]["strong"]
+    excl = ("CIs exclude 0" if _excludes_zero(mod) and _excludes_zero(strong)
+            else "not both CIs exclude 0")
+    q2, prof = n["vuln"], n["vuln"]["profile"]
+    o = n["offset_c"]
+    quiet = (f" Without the {o['quiet_dropped']} storms whose pre-storm quiet ap was disturbed "
+             f"({o['quiet_n_storms']} storms left): {r(o['quiet'])}." if "quiet" in o else "")
     return [
         "## Headline",
         "",
+        "### Q1. Extra decay from storms and model error",
+        "",
         f"- Storms cause extra decay beyond what a quiet-ap atmosphere would give: total storm effect, "
-        f"days 0-2, {_ci(n['event']['Y_total'], ' m/day')}.",
-        f"- MSIS 2.1 has no general post-storm error: event-study model error {_ci(n['event']['Y_residual'], ' m/day')}; "
-        f"days 0..+3 change across all {x['n_storms']} storms {_ci(x['all'], ' m/day')}, "
-        f"{_ci(x['without'], ' m/day')} without May/Oct 2024.",
+        f"days 0-2, {_ci(n['event']['Y_total'], ' m/day')} (event study); DML {_per_nt(tot)} m/day per nT of "
+        f"interval-mean ap, i.e. {100 * tot[0]:+.0f} m/day per 100 nT.",
+        f"- In ordinary storms MSIS gets the storm-window total about right but under-predicts decay at peak ap "
+        f"(DML by class: moderate ({mod[3]} storms) {_per_nt(mod)} and strong ({strong[3]} storms) {_per_nt(strong)} "
+        f"m/day per nT, {excl}); in severe storms its errors are storm-specific (Oct 2024 overshoot, May 2024 "
+        f"timing, Dec 2024 under-prediction). Storm-window total: event-study model error days 0-2 "
+        f"{_ci(n['event']['Y_residual'], ' m/day')}; days 0..+3 change across all {x['n_storms']} storms "
+        f"{_ci(x['all'], ' m/day')}, {_ci(x['without'], ' m/day')} without May/Oct 2024.",
         f"- Extreme storms ({x['objects']} objects, fig 8), verdict: **{x['verdict']}**.",
         f"  - Oct 2024 ({oct_['class']}): a real model overshoot. The days 0..+3 over-prediction survives 3-day "
         f"smoothing ({_ci(oct_['smooth'], ' m/day')}) and MSIS also predicts more altitude loss than observed from a "
@@ -432,10 +610,74 @@ def headline_text(n):
         f"before the storm).",
         f"  - Dec 2024 ({dec['class']}): the opposite, MSIS under-predicts the loss (observed / predicted "
         f"{r(dec['ratio'])}).",
-        "- So the headline is not \"models recover too slowly after storms\": MSIS 2.1 errors in the largest storms "
-        "are storm-specific, and only Oct 2024 shows a real overshoot.",
+        lag_text(d["refute"]["Y_residual"]),
+        "",
+        "### Q2. Who is hit hardest",
+        "",
+        f"- Storm vulnerability = drag sensitivity x an altitude factor; per unit drag the effect falls about "
+        f"{prof['ratio']:.0f}x from ~{round(prof['alt_lo'], -1):.0f} to ~{round(prof['alt_hi'], -1):.0f} km "
+        f"({prof['effect_lo']:.1f} to {prof['effect_hi']:.1f} (m/day per nT) per m^2/kg, mean of the supported "
+        f"cells of each altitude row; fig 9).",
+        "",
+        "### Q3. Operator offset (Starlink)",
+        "",
+        f"- Starlinks offset essentially all of the predicted storm loss (model-error corrected "
+        f"{o['total'][0]:.2f}, 95% CI {o['total'][1]:.2f}-{o['total'][2]:.2f}; {o['n_objects']} satellites, "
+        f"{o['n_storms']} storms), almost all of it during the storm (ducking part {r(o['duck'])}, recovery part "
+        f"{o['rec'][0]:+.2f}, 95% CI {o['rec'][1]:+.2f} to {o['rec'][2]:+.2f}, i.e. ~0).{quiet} Without May / Oct "
+        f"2024: {r(o['without'])}.",
         "",
     ]
+
+
+def q2_text(q):
+    """Question 2 lines: importances, seed stability, per-drag altitude pattern, cross-check."""
+    imp = lambda d: ", ".join(f"{k} {v:.3f}" for k, v in sorted(d.items(), key=lambda kv: -kv[1]))   # noqa: E731
+    t, pd_, prof = q["Y_total"], q[PER_DRAG_OUTCOME], q["profile"]
+    return [
+        "## Question 2: vulnerability map (fig 9)",
+        "",
+        f"- `Y_total` forest ({t['n_objects']} objects): importance {imp(t['importance'])}; "
+        f"{t['n_seeds']}-seed map correlation min {t['min_corr']:.3f} (mean {t['mean_corr']:.3f}); forest average "
+        f"{t['average']:+.3f} m/day per nT (unweighted row average, not the DML estimate).",
+        f"- Per unit drag sensitivity (`{PER_DRAG_OUTCOME}`): importance {imp(pd_['importance'])}; "
+        f"{pd_['n_seeds']}-seed map correlation min {pd_['min_corr']:.3f} (mean {pd_['mean_corr']:.3f}). Once size is "
+        f"taken out, altitude carries the map: the storm effect is proportional to drag sensitivity.",
+        f"- Per-drag altitude pattern: {prof['effect_lo']:.1f} at {prof['alt_lo']:.0f} km to {prof['effect_hi']:.1f} "
+        f"at {prof['alt_hi']:.0f} km ((m/day per nT) per m^2/kg), about {prof['ratio']:.1f}x; read for the pattern, "
+        f"not single cells. Cross-check (Y_total map / drag sensitivity vs the per-drag forest, supported cells): "
+        f"correlation {q['cross_corr']:.2f}.",
+        "",
+    ]
+
+
+def refutations_text(d):
+    """Refutations block: high-altitude equivalence, random common cause, shuffled storm
+    timing, with / without May + Oct 2024, and the lag result without them."""
+    lines = ["## Refutations (DML, m/day per nT)", ""]
+    for y in ("Y_total", "Y_residual"):
+        rf = d["refute"][y]
+        if rf["equivalent"] is None:
+            eq = "no equivalence test (main estimate covers 0)"
+        else:
+            eq = f"equivalence band +-{rf['band']:.3f}: {'PASS' if rf['equivalent'] else 'FAIL'}"
+        lines += [
+            f"- `{y}` (main {_per_nt(rf['all'])}):",
+            f"  - High-altitude control ({rf['n_high']} objects): {_per_nt(rf['high_alt'])}; {eq}.",
+            f"  - Random common cause: estimate moves {rf['rcc_shift_se']:+.2f} SE.",
+            f"  - Shuffled storm timing ({rf['n_shifts']} shifts): mean {rf['placebo_mean']:+.3f}, SD "
+            f"{rf['placebo_sd']:.3f}; placebo p = {rf['placebo_p']:.3f} ({rf['placebo_larger']} of "
+            f"{rf['n_shifts']} as large as the real estimate).",
+            f"  - Without May + Oct 2024 (storms {rf['dropped']}): {_per_nt(rf['without'])}.",
+        ]
+    lines += [f"  - Lag sweep without May + Oct 2024 (`Y_residual`): "
+              + ", ".join(f"{k} h {_per_nt(v)}" for k, v in d["refute"]["Y_residual"]["lags_without"].items()) + ".",
+              f"- Model error by storm class in DML (`Y_residual`): "
+              + ", ".join(f"{c} {_per_nt(v[:3]) if not np.isnan(v[1]) else f'{v[0]:+.3f} (no CI, {v[3]} storm(s))'}"
+                          for c, v in d["class"].items())
+              + f"; severe + extreme vs the rest, exact permutation p = {d['class_big_p']:.2f}.",
+              ""]
+    return lines
 
 
 def summary_text(n):
@@ -450,10 +692,12 @@ def summary_text(n):
     return "\n".join([
         "# Review figure pack",
         "",
-        "Made by `python -m src.review_figures` from the analysis table and results/causal. "
+        "Made by `python -m src.review_figures` from the analysis table, results/causal and results/dml. "
         "One line per figure with its key number.",
         "",
         *headline_text(n),
+        *refutations_text(n["dml"]),
+        *q2_text(n["vuln"]),
         "## Figures",
         "",
         f"1. `fig1_may2024_cohort.png`: the median decay rate of {n['may']['objects']} passive objects goes from "
@@ -496,6 +740,11 @@ def summary_text(n):
         f"Oct {oct_['quiet'][0]:+.0f} m, Dec {dec['quiet'][0]:+.0f} m. With the calm day after pushed later, "
         f"observed / predicted May/Oct/Dec {sens}. High-altitude control (1,040-1,211 km): |difference| at most "
         f"{x['high_quiet'][0]:.0f} m. Verdict (PLAN.md rules): {x['verdict']}.",
+        f"9. `fig9_vulnerability.png`: (A) per-object storm effect from the `Y_total` causal forest, (B) the `Y_total` "
+        f"map and (C) the map per unit drag sensitivity, both at the median inclination: the effect grows with drag "
+        f"sensitivity and, per unit drag, falls from {n['vuln']['profile']['effect_lo']:.1f} at "
+        f"{n['vuln']['profile']['alt_lo']:.0f} km to {n['vuln']['profile']['effect_hi']:.1f} at "
+        f"{n['vuln']['profile']['alt_hi']:.0f} km.",
         "",
     ])
 
@@ -522,12 +771,15 @@ def main(out_dir=OUT_DIR):
         ("offset", "fig7_operator_offset.png", lambda: fig_offset(storms)),
         ("extreme", "fig8_extreme_check.png",
          lambda: fig_extreme_check(extreme_check.run((table, storms, physics.load_msis_weather(), tles)))),
+        ("vuln", "fig9_vulnerability.png", lambda: fig_vulnerability()),
     ]:
         fig, numbers[key] = make()
         if key == "offset":
             numbers["offset_storms"] = numbers[key].pop("storms_smaller")
         print("wrote", _save(fig, name, out_dir))
-    (out_dir / "SUMMARY.md").write_text(summary_text(numbers))
+    numbers["dml"] = dml_numbers()
+    numbers["offset_c"] = offset_numbers()
+    (out_dir / "SUMMARY.md").write_text(summary_text(numbers), encoding="utf-8")
     print("wrote", out_dir / "SUMMARY.md")
 
 

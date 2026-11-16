@@ -1,0 +1,34 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+We set out to measure how much geomagnetic storms speed up the decay of objects in low Earth
+orbit, using one year of public orbit data and treating each storm as a natural experiment. The
+estimate is causal under the assumption that no time-varying confounding remains after we adjust
+for F10.7 and season. Storms speed up decay by 14.1~m/day over days 0--2 after onset
+(0.39~m/day per nT of ap), about 28\% faster than quiet-time decay, and the estimate holds
+without the two largest storms and without the outlier filter. Over days 0--2, NRLMSIS~2.1 shows
+little pooled error in ordinary storms but under-predicts decay at peak activity, and in the
+largest storms its errors change sign from one storm to the next. Vulnerability scales with drag
+sensitivity times an altitude factor that falls about threefold from 620 to 750~km. In an
+exploratory analysis, Starlink orbit changes are consistent with an approximately complete
+offset of the predicted storm loss (1.17, 95\% CI 0.97--1.36), almost all during the storm. The
+storm effect is backed by placebo dates, a pre-trend test, a high-altitude control group and a
+simulator with a known answer. The vulnerability map is backed by seed stability and synthetic
+recovery. The offset ratio is backed only by subset checks, because its placebo is imprecise.
+
+\section*{Author Contributions}
+P.~Shiv built the orbit cohort, TLE cleaning and precise-orbit validation. S.~Akash built the
+space-weather data and storm catalogue, the physics baseline and outcomes, the physics simulator,
+the object catalogue, the active-satellite table, the model-based offset ratio and the
+extreme-storm check. S.~Anil designed the analysis-table schema and causal graph and built the
+synthetic data, the stacked event study and its checks, and the overlap correction of the offset
+model. S.~Holla built the double machine learning, refutations, storm-class analysis and
+vulnerability maps. All authors wrote the paper.
+
+\section*{Code and Data Availability}
+All inputs are public: TLEs from Space-Track, space weather from NASA OMNIWeb, object data from
+CelesTrak and ESA DISCOSweb, and precise orbits from the GRACE-FO and Swarm missions. The code
+(Python) and the processed analysis table are provided in the project submission folder. The
+notebook \texttt{ICARUS\_final.ipynb} reproduces every headline number and figure from the
+processed table; the raw-data download and table build are listed step by step in the
+repository README.

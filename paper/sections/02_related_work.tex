@@ -1,0 +1,40 @@
+\section{Related Work}
+\label{sec:related}
+
+\textit{Storm-time drag.} Oliveira and Zesta~\cite{oliveira2019drag} used accelerometer-derived
+densities to measure satellite drag during magnetic storms and showed that decay grows with
+storm intensity and duration. Fang et al.~\cite{fang2022starlink} reconstructed the February
+2022 Starlink loss and found that pre-launch estimates based on NRLMSISE-00 underestimated the
+drag compared with a coupled whole-atmosphere model. Parker and Linares~\cite{parker2024gannon}
+looked at TLEs of the whole LEO catalogue during the May 2024 storm and documented both the
+density increase and the large manoeuvre response. Basak et al.~\cite{basak2024cosmicdance}
+lined up hourly Dst with Starlink TLEs and showed that even moderate storms can shift satellite
+altitudes, and their follow-up, CosmicDancePro~\cite{basak2026cosmicdancepro}, studies how the
+fleet was managed during the May 2024 superstorm. Wu et al.~\cite{wu2025decay} calibrate an
+orbital decay factor on quiet periods and combine it with a density proxy to track storm-time
+decay in near real time. Bruinsma and Laurens~\cite{bruinsma2024storms} test thermosphere models
+over 152 storms, but against the accelerometer densities of a few science satellites, not the
+decay of a tracked cohort. Most of these decay studies look at one storm, one satellite or one
+constellation.
+
+\textit{Density models.} NRLMSISE-00~\cite{picone2002nrlmsise} and its successors NRLMSIS
+2.0~\cite{emmert2021nrlmsis} and 2.1~\cite{emmert2022msis21} compute density from F10.7, its
+81-day mean and the ap index. Their storm-time accuracy is usually judged against a few
+accelerometer-carrying satellites. We judge NRLMSIS~2.1 by the decay it predicts for 250
+objects, which is the number operators actually use.
+
+\textit{Causal machine learning.} Double machine learning~\cite{chernozhukov2018dml} estimates a
+treatment effect after flexible models have removed the confounders, using cross-fitting to
+avoid overfitting bias. Causal forests~\cite{wager2018forest,athey2019grf} extend this to
+effects that vary with covariates. Event studies with staggered events and clean
+controls~\cite{cengiz2019stacked,sun2021eventstudy,callaway2021did} avoid comparing against
+units that are already treated. With only a few independent events, cluster-robust inference
+needs small-sample fixes such as the wild cluster
+bootstrap~\cite{cameron2008bootstrap,webb2023wild}.
+
+\textit{Where this paper fits.} What we add is the combination. We look at many storms through
+the decay of a whole tracked cohort, we restrict the main analysis to objects that cannot
+manoeuvre, we estimate the total storm effect and the density-model error separately, and we
+use calm-to-calm totals to tell a timing error apart from an error in the accumulated loss.
+Every estimator is also tested on synthetic data with a known answer. The Starlink offset ratio
+is an exploratory extra.

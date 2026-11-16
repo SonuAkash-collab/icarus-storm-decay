@@ -51,10 +51,10 @@ per-nT model error and report the class-specific estimates instead
 \textit{Does the outlier filter shape the answer?} The Hampel filter works on the NRLMSIS~2.1
 residual, so it might throw away real storm-time errors along with bad TLEs. Removal is concentrated at onset: it flags 18.8\% of day-0 rows against
 4.0\% on days $-10..-3$ and 5.5\% overall, and the day-0 share is highest in severe storms
-(44\%). Rerunning the event study with the flagged rows put back gives $-16.0$~m/day (CI $-23.4$ to
+(43.7\%). Rerunning the event study with the flagged rows put back gives $-16.0$~m/day (CI $-23.4$ to
 $-8.4$), with no filter at all $-16.0$ (CI $-23.4$ to $-8.3$), and with $k=5$ $-15.2$ (CI $-21.4$
-to $-8.7$). In every version the model error stays near zero ($-0.3$~m/day, with
-intervals that include zero). So the filter makes our headline slightly smaller, not larger,
+to $-8.7$). In every version the model error stays near zero ($-0.3$~m/day, CI $-5.2$ to $+4.3$ with
+the rows put back). So the filter makes our headline slightly smaller, not larger,
 and no headline moves by more than 20\%.
 
 Likewise, tightening the Q3 orbit-change screen from 1~km to 0.5~km or loosening it to 2~km

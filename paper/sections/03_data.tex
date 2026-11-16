@@ -22,7 +22,7 @@ intervals and does not remove climbs. The joined object catalogue has 291 object
 We parse each TLE with SGP4~\cite{vallado2006sgp4} and convert its (Kozai) mean motion to a mean
 semi-major axis using the WGS-72 constants. Using SGP4's recovered (Brouwer) mean motion instead
 shifts the semi-major axis by a nearly constant amount of up to about 3~km and changes decay
-rates by less than 0.05\%, so nothing depends on this choice. When the same epoch was published
+rates by 0.03\% over the cohort (at most 0.2\% for any object), so nothing depends on this choice. When the same epoch was published
 more than once we keep only the latest record, so that re-issues do not create fake intervals of
 zero or near-zero length.
 

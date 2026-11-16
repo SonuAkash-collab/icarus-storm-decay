@@ -1,0 +1,50 @@
+\section{Introduction}
+\label{sec:intro}
+
+In February 2022 SpaceX launched 49 Starlink satellites into a low parking orbit. Right after launch a
+minor geomagnetic storm arrived, the air at that altitude became denser, and 38 of the
+satellites were dragged back into the atmosphere before they could climb
+away~\cite{fang2022starlink}. Two years later, the May 2024 ``Gannon'' storm, the strongest in
+about twenty years, sped up the decay of almost every tracked object in low Earth orbit and set
+off a wave of manoeuvres by operators~\cite{parker2024gannon}. Drag decides how long each of
+the tens of thousands of objects in LEO stays up, storms can change it within hours, and
+collision screening and re-entry forecasts depend on getting it right.
+
+The physics is well known. During a storm, energy from the solar wind is dumped into the upper
+atmosphere at high latitudes. The thermosphere heats and expands, the density at a given height
+goes up, and so does drag. Putting a number on the storm's effect is harder than it sounds,
+though, because the Sun also changes the atmosphere in a slower way. Its ultraviolet (UV)
+output, tracked by the F10.7 radio flux, heats the thermosphere too, and periods with high UV
+also tend to have more storms. If we simply correlate storm strength with decay, part of the UV
+effect gets credited to the storms. On top of that, operators predict density with empirical
+models such as NRLMSIS~\cite{picone2002nrlmsise,emmert2021nrlmsis,emmert2022msis21}, so it
+matters just as much whether these models are wrong during storms.
+
+Our approach is to treat each storm as a natural experiment. Nobody can schedule when a storm
+arrives, so if we adjust for the measured F10.7 and the season, the decay just before a storm
+and the decay just after it should differ only because of the storm. This is a causal reading,
+and it rests on one assumption: that no time-varying confounder is left after the adjustment.
+Our placebo and control checks support that assumption but cannot prove it. We use only passive
+objects (debris and rocket bodies) in the main analysis, because they cannot fire thrusters and
+their orbits change only through natural forces. We also measure their decay against a physics
+baseline that already includes the real F10.7, so much of the UV effect is removed before any
+statistics are run.
+
+We ask three questions.
+\textbf{Q1:} How much extra decay do storms cause, and how wrong is NRLMSIS~2.1 during them?
+\textbf{Q2:} Which objects are hit hardest, by altitude, inclination and drag sensitivity?
+\textbf{Q3:} How much of the storm's altitude loss do operators undo, during the storm and
+after it?
+
+To answer them we built a 250-object passive cohort covering 20 storms and estimated the storm
+effect two ways, with a stacked event study and with double machine learning, which agree. We
+estimated the NRLMSIS~2.1 storm-time error separately and checked the three largest storms
+with a calm-to-calm comparison that does not depend on how TLE fits spread a loss across days.
+A causal forest turned the per-object effects into a vulnerability map, and for Starlink we
+built an exploratory offset ratio that splits the operator response into a part during the
+storm and a part afterwards. Every estimator was tested on a simulator with a planted effect.
+
+Sections~\ref{sec:related} to~\ref{sec:design} cover related work, data, the physics baseline
+and the causal design, Sections~\ref{sec:q1} to~\ref{sec:q3} answer the three questions,
+Section~\ref{sec:robust} tries to break the results and Section~\ref{sec:discussion} discusses
+their limits.

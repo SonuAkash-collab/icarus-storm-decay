@@ -1,0 +1,24 @@
+\begin{abstract}
+Geomagnetic storms heat and swell the upper atmosphere, so satellites in low Earth orbit (LEO)
+fall faster. We measure how much faster, how well NRLMSIS~2.1 predicts it, and how much of the
+loss operators win back. We used
+one year of public two-line element sets (April 2024 to April 2025), which covers 20 storms with
+Dst below $-50$~nT including the May 2024 superstorm, for 250 passive objects (debris and rocket
+bodies) between 400 and 800~km. We compare each object's decay with a physics baseline that
+already uses the measured solar flux (F10.7) and treat each storm as a natural experiment. A
+stacked event study finds that storms speed up decay by 14.1~m/day over days 0--2 after onset
+(95\% CI 8.4--19.8), and double machine learning gives 0.39~m/day for every nT of ap. Reading
+these as causal effects assumes no time-varying confounding is left after our adjustment. Pooled
+over days 0--2, NRLMSIS~2.1 shows little error but under-predicts decay at peak activity, and in
+the three largest storms its errors go in different directions. A causal forest shows that the damage
+scales with drag sensitivity times an altitude factor that falls about threefold from 620 to
+750~km. In an exploratory look at 21 Starlink satellites, the observed orbits are consistent
+with an almost complete offset of the predicted storm loss (offset ratio 1.17, 95\% CI
+0.97--1.36), almost all during the storm. Placebo dates, a pre-trend test, a high-altitude control and
+a simulator with a planted effect back the storm-effect estimate.
+\end{abstract}
+
+\begin{IEEEkeywords}
+geomagnetic storms, orbital decay, thermospheric density, NRLMSIS, causal inference,
+double machine learning, event study, causal forest, space situational awareness
+\end{IEEEkeywords}

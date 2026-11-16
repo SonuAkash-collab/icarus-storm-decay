@@ -1,0 +1,59 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+\usepackage[T1]{fontenc}
+\usepackage{cite}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta}
+
+% Grey TODO notes. To hide them all for the final version, change the line below to
+% \newcommand{\todo}[1]{}
+\newcommand{\todo}[1]{}
+
+\graphicspath{{figures/}}
+
+\begin{document}
+
+\title{ICARUS: Solar Storms and Satellite Decay\\
+\large A Causal Analysis of Geomagnetic Storm Effects on Low-Earth-Orbit Objects}
+
+\author{
+\IEEEauthorblockN{Sonu Akash}
+\IEEEauthorblockA{PES1UG24AM908\\PES University}
+\and
+\IEEEauthorblockN{Siddanth Anil}
+\IEEEauthorblockA{PES1UG24AM274\\PES University}
+\and
+\IEEEauthorblockN{Sidhant Holla}
+\IEEEauthorblockA{PES1UG24AM466\\PES University}
+\and
+\IEEEauthorblockN{Piyush Shiv}
+\IEEEauthorblockA{PES1UG24AM191\\PES University}
+}
+
+\maketitle
+
+\input{sections/00_abstract}
+
+% Section order and owners (see README.txt):
+\input{sections/01_introduction}   % Anil
+\input{sections/02_related_work}   % Holla
+\input{sections/03_data}           % Piyush (done) + Sonu (space weather)
+\input{sections/04_physics}        % Sonu
+\input{sections/05_causal_design}  % Anil
+\input{sections/06_q1_storm_effect}% Anil (event study) + Holla (DML) + Sonu (extreme storms)
+\input{sections/07_q2_vulnerability}% Holla
+\input{sections/08_q3_offset}      % Anil
+\input{sections/09_robustness}     % Holla
+\input{sections/10_discussion}     % Holla
+\input{sections/11_conclusion}     % Sonu
+
+\bibliographystyle{IEEEtran}
+\bibliography{refs}
+
+\end{document}

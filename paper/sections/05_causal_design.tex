@@ -1,0 +1,117 @@
+\section{Causal Design and Estimators}
+\label{sec:design}
+
+\subsection{The causal graph}
+Fig.~\ref{fig:dag} writes down what we assume. Solar activity raises both the UV flux (F10.7)
+and the rate of storms (ap), and both of these raise density, which raises decay. Season and
+altitude also affect decay. So we adjust for F10.7, its 81-day mean, season and altitude, and
+we leave density alone because it is the path the storm acts through. Storms are set off by
+solar-wind structures whose arrival nobody controls, which is what lets us treat each one as a
+natural experiment. The causal reading rests on one assumption: once we adjust for this set,
+nothing else that changes over time drives both storm timing and decay (for example an earlier
+storm, or a change in tracking quality). The placebo dates, pre-trend test and high-altitude
+control in Section~\ref{sec:robust} support this assumption but cannot prove it. Because passive
+objects cannot manoeuvre, their response is purely physical.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=6mm and 9mm, every node/.style={font=\footnotesize},
+  box/.style={draw, rounded corners=2pt, inner sep=3pt, align=center},
+  arr/.style={-{Stealth[length=2mm]}, thick}]
+\node[box] (sun) {Solar\\activity};
+\node[box, above right=of sun] (uv) {UV\\(F10.7)};
+\node[box, below right=of sun] (ap) {Storm\\(ap)};
+\node[box, right=22mm of sun] (rho) {Density\\(mediator)};
+\node[box, right=of rho] (y) {Decay};
+\node[box, above=5mm of y] (sa) {Season,\\altitude};
+\draw[arr] (sun) -- (uv); \draw[arr] (sun) -- (ap);
+\draw[arr] (uv) -- (rho); \draw[arr] (ap) -- (rho);
+\draw[arr] (rho) -- (y); \draw[arr] (sa) -- (y); \draw[arr] (sa) -- (rho);
+\end{tikzpicture}
+\caption{Causal graph. F10.7 confounds the storm--decay relation. Density is the mediator
+through which storms act and is never controlled for.}
+\label{fig:dag}
+\end{figure}
+
+\subsection{Stacked event study (Q1)}
+For each storm $s$ we collect every interval whose
+midpoint lies between days $-10$ and $+20$ of its onset. Storms are often less than 30 days
+apart, so we drop a row from stack $s$ if it falls inside another storm's active window (three
+days before that storm's onset to three days after its recovery end), and we drop a whole storm
+if its day~0 is contaminated or too few clean days are
+left~\cite{cengiz2019stacked,callaway2021did}. That leaves 12 of the 20 storms. On the stacked
+rows we fit, by weighted least squares with weights $\Delta t$,
+\begin{equation}
+Y_{ist} = \alpha_{is} + \sum_{k\neq -1} \beta_k\,\mathbf{1}[\lfloor e_{st}\rfloor = k]
++ \gamma^\top X_t + \varepsilon_{ist},
+\end{equation}
+where $\alpha_{is}$ is an object-by-stack fixed effect, $e_{st}$ is the event day, day $-1$ is
+the reference and $X_t$ holds the time-varying confounders (F10.7, its 81-day mean, season). Our
+headline number is the mean of $\beta_0$, $\beta_1$ and $\beta_2$, i.e. days 0--2.
+
+\subsection{Double machine learning (Q1)}
+The event study tells us how much happens on storm days. Double machine learning
+(DML)~\cite{chernozhukov2018dml} tells us how much happens per unit of storm strength, using the
+partially linear model $Y = \theta T + g(X) + \varepsilon$. The treatment $T$ is the
+interval-mean ap in nT. We use the mean rather than the total because storm intervals are
+shorter, and the total would mix interval length into the effect. We estimate $E[Y\mid X]$ and
+$E[T\mid X]$ with cross-fitting, regress the outcome residual on the treatment residual (weights
+$\Delta t$), and report $\theta$ in m/day per nT. The folds are whole blocks of time (one storm
+window, or one calendar week outside storms), never random rows. Random folds would let the
+models memorise storm dates.
+
+We fixed the model-selection rule before touching the real data. Each nuisance model is picked
+from a straight line, a cautious XGBoost and a flexible XGBoost by its error on held-out storms,
+so the data choose the model but not the rule. On synthetic data the full pipeline, selection
+included, covers the true effect in 48 of 50 worlds with linear confounding and 49 of 50 with
+curved confounding. A naive regression covers it in only 9 of 50 (bias $+149\%$). The main ap
+lag is 0~h, and we also report 6, 12 and 24~h.
+
+\subsection{Causal forest (Q2)}
+A causal forest~\cite{wager2018forest,athey2019grf} (EconML CausalForestDML) uses the same
+residuals and storm-blocked folds as DML but lets $\theta$ change with altitude, inclination and
+drag sensitivity. We draw the effect on an altitude $\times$ drag-sensitivity grid and grey out
+cells with fewer than three nearby objects. Since Eq.~\eqref{eq:drag} makes decay proportional
+to $B$, we also fit the forest to $Y_{\text{total}}/\hat B$. On synthetic data the forest recovers the planted pattern
+(correlation 0.925), and the map is stable across five seeds.
+
+\subsection{Model-based offset ratio (Q3)}
+No passive object flies near the Starlink shells (none at 440--570~km and 38--58$^\circ$), so
+each satellite acts as its own control. For satellite $j$, storm $s$ and
+window $w$, where the \emph{ducking} window runs from onset to recovery end and the
+\emph{recovery} window covers the next ten days, the predicted and observed storm losses are
+\begin{align}
+P_{jsw} &= \textstyle\sum_{i\in w} (\hat B_j D_i - \hat B_j D_i^{\text{quiet}})\,\Delta t_i,\\
+O_{jsw} &= \textstyle\sum_{i\in w} (\dot a_i^{\text{obs}} - \bar{\dot a}_{js}^{\text{pre}})\,\Delta t_i,
+\end{align}
+where $\bar{\dot a}^{\text{pre}}_{js}$ is the satellite's own mean decay over days $-10$ to
+$-3$, so routine station keeping cancels out. The offset ratio is $1 - \sum O / \sum P$ over all
+satellite--storm pairs. A value of 0 means the satellite lost everything physics predicts, and 1
+means it lost nothing extra. The total splits neatly into a ducking part and a recovery part.
+
+For $\hat B_j$ we take the catalogue value $2.2\,A/m$ and scale it by the median fitted/catalogue
+ratio of rocket bodies within $\pm50$~km of each shell (0.71--0.77, against about 0.8 over all
+rocket bodies). The corrected ratio also subtracts the passive objects' model error by storm
+class and 100-km band. We exclude rows in deorbit (free drag) and rows in a 21-day window with
+more than 1~km of net altitude change (orbit raising, shell changes), and each storm's windows
+stop at the next storm's onset so no storm is counted twice.
+
+\subsection{Extreme-storm check (Q1)}
+TLEs smear out fast changes, so for the three largest storms we therefore also measure the total altitude lost
+from the last calm day before the storm (in days $-10$ to $-3$) to the first calm day after
+recovery, where calm means every 3-hour ap is below 27. We compare observed with predicted loss
+and subtract the model's own local quiet error. We fixed the rule in advance: a storm counts as
+a real model overshoot only if its days 0--3 over-prediction survives 3-day smoothing
+\emph{and} the calm-to-calm loss is over-predicted against both baselines.
+
+\subsection{Inference}
+Every object sees the same storm, so our real sample size is 20 storms, not 178,107 rows. The
+event-study, DML and offset-ratio intervals therefore cluster by storm (or quiet time block) and
+use a wild cluster bootstrap with Webb weights~\cite{cameron2008bootstrap,webb2023wild}. Because
+storms can sit close together, one row can end up in two event-study stacks, so the event
+study's main test is a placebo test on 500 randomly drawn storm-free dates. Two intervals do not
+cluster by storm. The causal forest's intervals treat rows as independent, so we read the forest
+for its pattern only, and the calm-to-calm intervals resample objects within one storm. All
+intervals are conditional on the fitted drag sensitivities, and the offset-ratio intervals also
+hold the predicted storm loss fixed. Every headline is also reported without the May and October
+2024 storms (three storm entries: early May, the May superstorm and October).

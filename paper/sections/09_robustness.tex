@@ -1,0 +1,62 @@
+\section{Trying to Break the Results}
+\label{sec:robust}
+
+For each result we ran tests that could have knocked it down (Table~\ref{tab:checks}), though
+they do not back every result equally.
+
+The high-altitude control group (15 objects at 1,040--1,211~km, where storm heating barely
+reaches) gives a small DML effect of $-0.023$~m/day per nT (CI $-0.026$ to $-0.021$). That is
+not exactly zero, but it is about 6\% of the main estimate and inside an equivalence band of
+$\pm0.197$ (half the main estimate) that we set in advance. Adding a random common cause moves
+the DML estimate by $-0.01$ standard errors, which shows numerical stability rather than
+robustness to a real missing confounder. Shifting the storm calendar to 100 random wrong dates
+gives a mean effect of $+0.004$ (SD 0.028), and none of the 100 shifts matches the real estimate
+($p=0.010$). Dropping the intervals flagged as TLE climbs moves the event-study effect only from
+$-14.1$ to $-14.6$~m/day. The synthetic tests show that the pipeline works in simulated worlds,
+not that the real causal assumptions hold.
+
+\begin{table}[t]
+\caption{Checks behind each result}
+\label{tab:checks}
+\centering
+\small
+\begin{tabular}{@{}p{3.1cm}p{3.0cm}c@{}}
+\toprule
+Check & Result & \\
+\midrule
+Placebo storm dates (500) & $p<0.002$ & pass \\
+Pre-trend (days $-10..-2$) & $p=0.41$ & pass \\
+High-altitude control, ES & $-0.69$ ($-1.42$, $0.07$) & pass \\
+High-altitude control, DML & $-0.023$, inside $\pm0.197$ & pass \\
+Random common cause & $-0.01$ SE & pass \\
+Shuffled storm timing (100) & $p=0.010$ & pass \\
+Without May/Oct 2024 & $-13.9$ (ES), $-0.503$ (DML) & pass \\
+No Hampel filter (ES) & $-16.0$ ($-23.4$, $-8.3$) & pass \\
+Q3 screen 0.5 / 2~km & 1.18 / 1.18 & pass \\
+Synthetic DML coverage & 48/50, 49/50 & pass \\
+Synthetic forest recovery & $r=0.925$ & pass \\
+Held-out quiet residual & $-0.13$ (SE 1.07) & pass \\
+GRACE-FO decay rate & $r=0.70$ & good \\
+Swarm-A decay rate & $r=0.457$ & fair \\
+Catalogue drag ranking & $\rho=0.81$ & good \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For the model error $Y_{\text{residual}}$ the evidence is weaker. The shuffled-timing placebo
+gives $p=0.059$ and the pooled DML interval covers zero, which is why we do not claim a pooled
+per-nT model error and report the class-specific estimates instead
+(Section~\ref{sec:modelerror}).
+
+\textit{Does the outlier filter shape the answer?} The Hampel filter works on the NRLMSIS~2.1
+residual, so it might throw away real storm-time errors along with bad TLEs. Removal is concentrated at onset: it flags 18.8\% of day-0 rows against
+4.0\% on days $-10..-3$ and 5.5\% overall, and the day-0 share is highest in severe storms
+(43.7\%). Rerunning the event study with the flagged rows put back gives $-16.0$~m/day (CI $-23.4$ to
+$-8.4$), with no filter at all $-16.0$ (CI $-23.4$ to $-8.3$), and with $k=5$ $-15.2$ (CI $-21.4$
+to $-8.7$). In every version the model error stays near zero ($-0.3$~m/day, CI $-5.2$ to $+4.3$ with
+the rows put back). So the filter makes our headline slightly smaller, not larger,
+and no headline moves by more than 20\%.
+
+Likewise, tightening the Q3 orbit-change screen from 1~km to 0.5~km or loosening it to 2~km
+gives an offset of 1.18 both times (against 1.17), and only the number of satellite--storm pairs
+changes (262, 278 and 286).

@@ -1,0 +1,28 @@
+\section{Discussion and Limitations}
+\label{sec:discussion}
+
+Put together, the results describe a short, sharp shock. On the onset day a typical storm makes
+objects fall roughly 60\% faster ($-30$ against a pooled quiet mean of about $-50$~m/day). Most of
+the response comes near onset, with smaller negative values still visible on days 4--5. Pooled
+over days 0--2, NRLMSIS~2.1 shows little mean error, but that average hides two problems. In
+ordinary storms it gets the timing wrong and under-predicts decay at peak ap, and in the largest
+storms its totals are wrong in storm-specific ways. That matters more for short-term conjunction
+screening than for lifetime estimates. Vulnerability follows the drag equation: drag sensitivity
+times an altitude factor, with lower objects hit harder per unit drag. And in our exploratory
+look at Starlink, the observed orbit changes are consistent with an approximately complete
+offset of the predicted loss, almost all during the storm.
+
+The study has clear limits, and we list eight. (1) One year of data gives 20 storms, of which 12
+have clean event-study windows, so storm-level intervals are wide and class comparisons have
+little power. (2) TLEs are mean-element fits, not true altitudes, and they blur changes faster
+than about a day. This is why the extreme storms needed the calm-to-calm check. (3) Question~3
+covers a single operator, with catalogue-scaled drag sensitivity and a weak placebo. (4) For six
+storms the pre-storm quiet ap was raised by an earlier storm. A storm-free quiet ap would fix
+this, and in its place we report the run without those storms. (5) The causal forest's intervals
+treat rows as independent. (6) We only evaluate NRLMSIS, and other models such as JB2008 or DTM
+may behave differently. (7) The Hampel filter runs on the NRLMSIS~2.1 residual and removes
+proportionally more rows at storm onset. Our sensitivity runs show the headlines survive without
+it, but the filter could still hide some real storm-peak model error. (8) Intervals are
+conditional on the fitted drag sensitivities and, for Question~3, on the catalogue scaling, and
+this uncertainty is not carried through. Natural next steps are held-out storms, more of the solar cycle, a
+second constellation and other density models.
